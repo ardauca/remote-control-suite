@@ -15,12 +15,12 @@ Production-quality, ultra low-latency, zero-cloud PC remote control platform for
 ## 🚀 Key Features
 
 * **Zero Cloud & Private:** Everything runs directly on your local Wi-Fi network (LAN) over high-performance WebSockets.
-* **Ultra-Low Latency Mouse & Touchpad:**
+* **Ultra-Low Latency Mouse & Touchpad (Phase 3):**
   * Precision relative cursor tracking via Win32 `SetCursorPos` and `mouse_event`.
   * Multi-touch gestures: single-tap left click, two-finger right click, two-finger vertical scrolling with inertia.
   * Drag & Drop lock mode with physical haptic vibration feedback.
   * Customizable cursor sensitivity and scroll invert options.
-* **Virtual Keyboard & Unicode Engine:**
+* **Virtual Keyboard & Unicode Engine (Phase 4):**
   * Native iOS virtual keyboard trigger.
   * Full Unicode support (`KEYEVENTF_UNICODE`) — type Turkish characters (`ç, ğ, ı, İ, ö, ş, ü`), symbols, and emojis accurately into any active Windows application.
   * Modifier key engine (`CTRL`, `ALT`, `SHIFT`, `WIN`) supporting sticky and locked states.
@@ -28,6 +28,26 @@ Production-quality, ultra low-latency, zero-cloud PC remote control platform for
   * Quick Windows shortcuts (`Ctrl+C`, `Ctrl+V`, `Alt+Tab`, `Win+D`, `Win+L`, `Ctrl+Shift+Esc`, etc.).
   * Custom user-defined macro and combination creator with persistent browser storage.
   * Disconnect safety: automatically releases all held modifier keys if connection drops.
+* **WASAPI Audio Mixer & GSMTC Media Controls (Phase 5):**
+  * **Master Volume & Mute:** Real-time bidirectional synchronization with Windows volume bar.
+  * **Per-Application Volume Mixer:** Enumerate running audio sessions (Chrome, Spotify, games, etc.) with independent volume sliders and mute toggles.
+  * **Now Playing Integration:** Real-time metadata tracking (Track Title, Artist, Album, Playback status) via Windows System Media Transport Controls (GSMTC WinRT).
+  * **Universal Media Playback:** Play/Pause, Next Track (`>>|`), Previous Track (`|<<`), and Stop with Win32 media-key fallback.
+* **Windows System Controls & Timed Shutdown (Phase 6):**
+  * **Quick System Actions:** Workstation Lock (`Win+L`), Sleep, Display Off, Task Manager, Show Desktop toggle (`Win+D`), and Screenshot.
+  * **Timed Shutdown Scheduler:** Schedule automatic shutdown or restart (e.g. 30 minutes, 1 hour, custom) with safety confirmation modals.
+  * **Live Countdown Broadcast:** Real-time remaining seconds ticker with one-click cancellation.
+* **Ultra-Low Latency Display Streamer & Screen Mirroring (Phase 7):**
+  * **Extensible 16-Byte Binary Protocol:** Transmits hardware cursor metadata, sequence numbers, and JPEG payload in a single frame.
+  * **Zero-Latency Atomic Drop-Frame Architecture:** Uses atomic frame swapping to guarantee the mobile client always receives the latest frame with zero queue buildup.
+  * **Hardware Vector Cursor Overlay:** Cursor position is rendered client-side as a crisp SVG vector, avoiding JPEG artifacts and saving bandwidth.
+  * **Zero-Obstruction Fullscreen Mobile UX:** 
+    * Fullscreen mode frees 100% of the display for Windows — no permanent overlay buttons block menus (`File`, `Edit`, `View`), close buttons, or taskbar.
+    * Slide-over Quick Controls menu (`⚙`) for Zoom, Pan, Rotation, Telemetry, and Exit.
+    * **90° Software Rotation:** One-tap widescreen orientation toggle even if iOS Portrait Lock is enabled in Control Center.
+  * **Real-Time Data Telemetry:** Live FPS counter, actual network throughput (KB/s), estimated data usage (MB/min, GB/hour), frame drops, and latency.
+  * **Bandwidth Presets:** Mobile Data Saver (540p / 8 FPS), Balanced (720p / 15 FPS), High Wi-Fi (1080p / 25 FPS), and Snapshot-on-Demand.
+  * **Remote Touch Interaction:** Single tap left-click, double tap, long-press right-click, and pan/zoom navigation.
 * **Native Windows Host Dashboard:**
   * Sleek dark-mode Windows Forms dashboard and System Tray (`NotifyIcon`) integration.
   * Real-time connected client monitor and live event activity log.
@@ -35,7 +55,7 @@ Production-quality, ultra low-latency, zero-cloud PC remote control platform for
   * Quick URL and IP copying for seamless pairing.
 * **Progressive Web App (PWA):**
   * Installable directly to iPhone Home Screen via Safari Share menu.
-  * Full-screen standalone mode with zero browser address bar distractions and safe-area notch adaptation.
+  * Full-screen standalone mode with zero browser address bar distractions and safe-area notch adaptation (`orientation: any`).
 
 ---
 
@@ -45,10 +65,12 @@ Production-quality, ultra low-latency, zero-cloud PC remote control platform for
 ┌─────────────────────────────────┐           Local Wi-Fi Network (LAN)          ┌──────────────────────────────────┐
 │          iPhone (iOS)           │ ◄──────────────────────────────────────────► │           Windows Host           │
 │                                 │                                              │                                  │
-│  • React 19 + TypeScript + Vite │      HTTP:52520 (Initial PWA bundle)         │  • ASP.NET Core Kestrel Host     │
+│  • React 19 + TypeScript + Vite │      HTTP:52520 (PWA bundle & Snapshot)      │  • ASP.NET Core Kestrel Host     │
 │  • Zustand State Management     │                                              │  • AgentWebSocketManager         │
-│  • Pointer Events & Gestures    │      WS:52520/ws (Binary/JSON frames)        │  • WindowsInputSimulator (Win32) │
-│  • iOS Vibration Haptics        │ ───────────────────────────────────────────► │  • System Tray & Dashboard       │
+│  • Binary Frame Decoder         │      WS:52520/ws (JSON commands & events)    │  • WindowsInputSimulator (Win32) │
+│  • SVG Vector Cursor Overlay    │ ◄──────────────────────────────────────────► │  • WASAPI & GSMTC Media Engine   │
+│  • iOS Safe-Area & Fullscreen   │      WS:52520/ws (16-byte binary screen)     │  • ScreenStreamCoordinator (GDI) │
+│  • iOS Vibration Haptics        │ ◄─────────────────────────────────────────── │  • System Tray & Dashboard       │
 └─────────────────────────────────┘                                              └──────────────────────────────────┘
 ```
 
@@ -127,6 +149,9 @@ node scripts/verify-media-volume.js
 
 # Verify Windows power management, timed shutdown scheduler, and system controls
 node scripts/verify-power.js
+
+# Verify display streamer, binary frames, 1080p snapshot, telemetry, and remote touch
+node scripts/verify-screen.js
 ```
 
 ---
@@ -139,7 +164,7 @@ node scripts/verify-power.js
 - [x] **Phase 4:** Virtual keyboard, Unicode text input, modifier engine, quick shortcuts, custom macros.
 - [x] **Phase 5:** Windows Media Control & Volume Mixer (WASAPI & GSMTC session integration).
 - [x] **Phase 6:** Windows System Controls & Timed Shutdown (Power/Sleep/Lock, Task Manager, Timed Shutdown Scheduler).
-- [ ] **Phase 7:** Display Streamer & Ultra-Low Latency Screen Mirroring.
+- [x] **Phase 7:** Display Streamer, Ultra-Low Latency Screen Mirroring & Zero-Obstruction Mobile UX.
 
 ---
 
