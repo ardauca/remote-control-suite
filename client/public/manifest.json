@@ -4,7 +4,7 @@
   "description": "High-performance PC remote control for iPhone",
   "start_url": "/",
   "display": "standalone",
-  "orientation": "portrait",
+  "orientation": "any",
   "background_color": "#0b0f19",
   "theme_color": "#0b0f19",
   "icons": [
