@@ -1,0 +1,17 @@
+{
+  "name": "Remote Control Suite",
+  "short_name": "Remote PC",
+  "description": "High-performance PC remote control for iPhone",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0b0f19",
+  "theme_color": "#0b0f19",
+  "icons": [
+    {
+      "src": "/favicon.ico",
+      "sizes": "64x64 32x32 24x24 16x16",
+      "type": "image/x-icon"
+    }
+  ]
+}
