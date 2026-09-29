@@ -49,7 +49,17 @@ export class MacroManager {
   public static getCustomShortcuts(): ShortcutDefinition[] {
     try {
       const data = localStorage.getItem(this.CUSTOM_STORAGE_KEY);
-      return data ? JSON.parse(data) : [];
+      if (!data) return [];
+      const parsed = JSON.parse(data);
+      if (!Array.isArray(parsed)) return [];
+      return parsed.filter((item): item is ShortcutDefinition =>
+        item &&
+        typeof item.id === 'string' &&
+        typeof item.name === 'string' &&
+        Array.isArray(item.keys) &&
+        item.keys.length > 0 &&
+        item.keys.every((k: unknown) => typeof k === 'string')
+      );
     } catch {
       return [];
     }
@@ -59,8 +69,8 @@ export class MacroManager {
     const list = this.getCustomShortcuts();
     const newShortcut: ShortcutDefinition = {
       id: 'custom_' + Date.now().toString(36),
-      name,
-      keys,
+      name: name.trim(),
+      keys: keys.map(k => k.trim().toUpperCase()),
       category: 'custom'
     };
     list.push(newShortcut);
@@ -75,36 +85,43 @@ export class MacroManager {
 
   public static executeShortcut(keys: string[]): void {
     if (!keys || keys.length === 0) return;
-    wsClient.send('command', 'keyboard.shortcut', { keys });
+    const cleanKeys = keys.map(k => k.trim().toUpperCase());
+    wsClient.send('command', 'keyboard.shortcut', { keys: cleanKeys });
   }
 
   public static async executeMacro(actions: MacroAction[]): Promise<void> {
-    for (const action of actions) {
-      switch (action.type) {
-        case 'keyDown':
-          if (action.key) {
-            wsClient.send('command', 'keyboard.keyDown', { key: action.key });
-          }
-          break;
-        case 'keyUp':
-          if (action.key) {
-            wsClient.send('command', 'keyboard.keyUp', { key: action.key });
-          }
-          break;
-        case 'text':
-          if (action.text) {
-            wsClient.send('command', 'keyboard.text', { text: action.text });
-          }
-          break;
-        case 'shortcut':
-          if (action.keys && action.keys.length > 0) {
-            wsClient.send('command', 'keyboard.shortcut', { keys: action.keys });
-          }
-          break;
-        case 'delay':
-          await new Promise(r => setTimeout(r, action.durationMs || 50));
-          break;
+    try {
+      for (const action of actions) {
+        switch (action.type) {
+          case 'keyDown':
+            if (action.key) {
+              wsClient.send('command', 'keyboard.keyDown', { key: action.key.trim().toUpperCase() });
+            }
+            break;
+          case 'keyUp':
+            if (action.key) {
+              wsClient.send('command', 'keyboard.keyUp', { key: action.key.trim().toUpperCase() });
+            }
+            break;
+          case 'text':
+            if (action.text) {
+              wsClient.send('command', 'keyboard.text', { text: action.text });
+            }
+            break;
+          case 'shortcut':
+            if (action.keys && action.keys.length > 0) {
+              this.executeShortcut(action.keys);
+            }
+            break;
+          case 'delay':
+            await new Promise(r => setTimeout(r, action.durationMs || 50));
+            break;
+        }
       }
+    } catch (err) {
+      console.error('Error executing macro, releasing keys as safety measure:', err);
+      wsClient.send('command', 'keyboard.releaseAll', {});
+      throw err;
     }
   }
 }

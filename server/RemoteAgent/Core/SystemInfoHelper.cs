@@ -59,7 +59,9 @@ public static class SystemInfoHelper
             "system.status",
             "system.heartbeat",
             "mouse.control",
+            "input.mouse",
             "keyboard.control",
+            "input.keyboard",
             "media.control",
             "volume.control",
             "power.control"

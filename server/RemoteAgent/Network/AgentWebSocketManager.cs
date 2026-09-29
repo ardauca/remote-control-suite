@@ -88,7 +88,7 @@ public class AgentWebSocketManager
                     ms.Seek(0, SeekOrigin.Begin);
                     using var reader = new StreamReader(ms, Encoding.UTF8);
                     var messageJson = await reader.ReadToEndAsync();
-                    await ProcessMessageAsync(webSocket, messageJson);
+                    await ProcessMessageAsync(webSocket, connectionId, messageJson);
                 }
             }
         }
@@ -103,7 +103,11 @@ public class AgentWebSocketManager
         finally
         {
             _activeSockets.TryRemove(connectionId, out _);
-            _inputSimulator.ReleaseAllKeys();
+            _inputSimulator.ReleaseConnectionKeys(connectionId);
+            if (_activeSockets.IsEmpty)
+            {
+                _inputSimulator.ReleaseAllKeys();
+            }
             _logger.LogInformation("WebSocket client removed. ID: {ConnectionId}. Remaining: {Count}", connectionId, _activeSockets.Count);
             ActiveConnectionsChanged?.Invoke(_activeSockets.Count);
 
@@ -122,7 +126,7 @@ public class AgentWebSocketManager
         }
     }
 
-    private async Task ProcessMessageAsync(WebSocket webSocket, string rawJson)
+    private async Task ProcessMessageAsync(WebSocket webSocket, string connectionId, string rawJson)
     {
         try
         {
@@ -205,6 +209,14 @@ public class AgentWebSocketManager
                         var text = textProp.GetString();
                         if (!string.IsNullOrEmpty(text))
                         {
+                            // Security: Enforce max 2000 chars per text packet
+                            if (text.Length > 2000)
+                            {
+                                _logger.LogWarning("Oversized text payload ({Length} chars) rejected from {ConnectionId}", text.Length, connectionId);
+                                var err = new ErrorPayload { Code = "PAYLOAD_TOO_LARGE", Message = "Text payload exceeds 2000 characters limit" };
+                                await SendJsonAsync(webSocket, MessageEnvelope<ErrorPayload>.Create("response", ActionTypes.SystemError, err), CancellationToken.None);
+                                return;
+                            }
                             _inputSimulator.SendText(text);
                         }
                     }
@@ -214,10 +226,17 @@ public class AgentWebSocketManager
                     if (root.TryGetProperty("payload", out var keyDownPayload) &&
                         keyDownPayload.TryGetProperty("key", out var downKeyProp))
                     {
-                        var key = downKeyProp.GetString();
+                        var key = downKeyProp.GetString()?.Trim();
                         if (!string.IsNullOrEmpty(key))
                         {
-                            _inputSimulator.KeyDown(key);
+                            if (!_inputSimulator.IsValidKey(key))
+                            {
+                                _logger.LogWarning("Invalid or unmapped key '{Key}' rejected for KeyDown from {ConnectionId}", key, connectionId);
+                                var err = new ErrorPayload { Code = "INVALID_KEY", Message = $"Key '{key}' is not mapped or recognized" };
+                                await SendJsonAsync(webSocket, MessageEnvelope<ErrorPayload>.Create("response", ActionTypes.SystemError, err), CancellationToken.None);
+                                return;
+                            }
+                            _inputSimulator.KeyDown(key, connectionId);
                         }
                     }
                     break;
@@ -226,10 +245,10 @@ public class AgentWebSocketManager
                     if (root.TryGetProperty("payload", out var keyUpPayload) &&
                         keyUpPayload.TryGetProperty("key", out var upKeyProp))
                     {
-                        var key = upKeyProp.GetString();
+                        var key = upKeyProp.GetString()?.Trim();
                         if (!string.IsNullOrEmpty(key))
                         {
-                            _inputSimulator.KeyUp(key);
+                            _inputSimulator.KeyUp(key, connectionId);
                         }
                     }
                     break;
@@ -242,9 +261,26 @@ public class AgentWebSocketManager
                         var keys = new List<string>();
                         foreach (var k in keysArrayProp.EnumerateArray())
                         {
-                            var s = k.GetString();
+                            var s = k.GetString()?.Trim();
                             if (!string.IsNullOrEmpty(s)) keys.Add(s);
                         }
+
+                        if (keys.Count > 8)
+                        {
+                            _logger.LogWarning("Shortcut keys count exceeded ({Count} keys) from {ConnectionId}", keys.Count, connectionId);
+                            var err = new ErrorPayload { Code = "INVALID_SHORTCUT", Message = "Shortcut exceeds 8 keys limit" };
+                            await SendJsonAsync(webSocket, MessageEnvelope<ErrorPayload>.Create("response", ActionTypes.SystemError, err), CancellationToken.None);
+                            return;
+                        }
+
+                        if (keys.Any(k => !_inputSimulator.IsValidKey(k)))
+                        {
+                            _logger.LogWarning("Shortcut contains unrecognized key from {ConnectionId}", connectionId);
+                            var err = new ErrorPayload { Code = "INVALID_KEY", Message = "Shortcut contains unmapped key" };
+                            await SendJsonAsync(webSocket, MessageEnvelope<ErrorPayload>.Create("response", ActionTypes.SystemError, err), CancellationToken.None);
+                            return;
+                        }
+
                         if (keys.Count > 0)
                         {
                             _inputSimulator.ExecuteShortcut(keys.ToArray());
@@ -253,7 +289,7 @@ public class AgentWebSocketManager
                     break;
 
                 case ActionTypes.KeyboardReleaseAll:
-                    _inputSimulator.ReleaseAllKeys();
+                    _inputSimulator.ReleaseConnectionKeys(connectionId);
                     break;
 
                 default:

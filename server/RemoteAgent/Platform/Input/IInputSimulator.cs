@@ -10,9 +10,11 @@ public interface IInputSimulator
     void MouseScroll(int deltaX, int deltaY);
 
     // Keyboard & Modifiers
+    bool IsValidKey(string key);
     void SendText(string text);
-    void KeyDown(string key);
-    void KeyUp(string key);
+    void KeyDown(string key, string? connectionId = null);
+    void KeyUp(string key, string? connectionId = null);
     void ExecuteShortcut(string[] keys);
+    void ReleaseConnectionKeys(string connectionId);
     void ReleaseAllKeys();
 }

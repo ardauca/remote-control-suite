@@ -43,6 +43,7 @@ export const KeyboardControlBar: React.FC = () => {
   const [newShortcutModifiers, setNewShortcutModifiers] = useState<string[]>(['CTRL']);
 
   const inputRef = useRef<HTMLInputElement>(null);
+  const isComposingRef = useRef(false);
 
   // Auto release modifiers on cleanup or disconnect
   useEffect(() => {
@@ -61,7 +62,7 @@ export const KeyboardControlBar: React.FC = () => {
       wsClient.send('command', 'keyboard.keyDown', { key: mod });
     } else if (currentState === 'STICKY') {
       nextState = 'LOCKED';
-      // Already down
+      // Already down on Windows
     } else {
       nextState = 'IDLE';
       wsClient.send('command', 'keyboard.keyUp', { key: mod });
@@ -105,29 +106,54 @@ export const KeyboardControlBar: React.FC = () => {
     setTimeout(() => {
       wsClient.send('command', 'keyboard.keyUp', { key });
       releaseStickyModifiers();
-    }, 20);
+    }, 25);
   };
 
-  // Direct Native Text Typing
+  // Direct Native Text Typing with Composition (IME / Turkish Accents / Emojis) Support
+  const handleCompositionStart = () => {
+    isComposingRef.current = true;
+  };
+
+  const handleCompositionEnd = (e: React.CompositionEvent<HTMLInputElement>) => {
+    isComposingRef.current = false;
+    const val = e.data || (e.target as HTMLInputElement).value;
+    if (val) {
+      wsClient.send('command', 'keyboard.text', { text: val });
+      releaseStickyModifiers();
+      setTextInput('');
+    }
+  };
+
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = e.target.value;
-    if (!val) return;
+    setTextInput(val);
 
-    // Send the typed character(s) directly as Unicode text to Windows
-    wsClient.send('command', 'keyboard.text', { text: val });
-    releaseStickyModifiers();
-
-    // Immediately clear field to prevent character accumulation and duplicate issues
-    setTextInput('');
+    // If composition (predictive text / accent selection) is not in progress, send immediately
+    if (!isComposingRef.current && val) {
+      wsClient.send('command', 'keyboard.text', { text: val });
+      releaseStickyModifiers();
+      setTextInput('');
+    }
   };
 
-  // Handle hardware/iOS Backspace or Enter when input text is empty
+  // iOS Safari Virtual Keyboard Backspace and hardware shortcuts
+  const handleBeforeInput = (e: React.FormEvent<HTMLInputElement>) => {
+    const native = e.nativeEvent as InputEvent;
+    if (native && native.inputType === 'deleteContentBackward') {
+      sendSpecialKey('BACKSPACE');
+    }
+  };
+
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Backspace') {
+    if (e.key === 'Backspace' && !textInput) {
       e.preventDefault();
       sendSpecialKey('BACKSPACE');
     } else if (e.key === 'Enter') {
       e.preventDefault();
+      if (textInput) {
+        wsClient.send('command', 'keyboard.text', { text: textInput });
+        setTextInput('');
+      }
       sendSpecialKey('ENTER');
     } else if (e.key === 'Tab') {
       e.preventDefault();
@@ -138,15 +164,10 @@ export const KeyboardControlBar: React.FC = () => {
     }
   };
 
-  // Execute quick shortcut
+  // Execute quick shortcut without unintended modifier merging
   const handleShortcut = (keys: string[]) => {
-    // If any modifier is active, merge them
-    const activeMods = Object.entries(modifiers)
-      .filter(([_, state]) => state !== 'IDLE')
-      .map(([mod]) => mod);
-
-    const mergedKeys = Array.from(new Set([...activeMods, ...keys]));
-    MacroManager.executeShortcut(mergedKeys);
+    // Predefined shortcut is self-contained. Execute shortcut and clear any pending sticky modifiers.
+    MacroManager.executeShortcut(keys);
     releaseStickyModifiers();
   };
 
@@ -179,6 +200,9 @@ export const KeyboardControlBar: React.FC = () => {
           value={textInput}
           onChange={handleInputChange}
           onKeyDown={handleKeyDown}
+          onBeforeInput={handleBeforeInput}
+          onCompositionStart={handleCompositionStart}
+          onCompositionEnd={handleCompositionEnd}
           autoCapitalize="none"
           autoCorrect="off"
           spellCheck="false"

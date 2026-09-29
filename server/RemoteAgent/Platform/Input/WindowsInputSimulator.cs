@@ -8,7 +8,13 @@ public class WindowsInputSimulator : IInputSimulator
 {
     private readonly ILogger<WindowsInputSimulator> _logger;
     private static readonly int InputSize = Marshal.SizeOf<NativeMethods.INPUT>();
-    private readonly ConcurrentDictionary<byte, bool> _activeKeys = new();
+
+    // Track keys held per connection: connectionId -> (vk -> pressTime)
+    private readonly ConcurrentDictionary<string, ConcurrentDictionary<byte, DateTime>> _connectionKeys = new();
+    // Track total active count per key across all connections
+    private readonly ConcurrentDictionary<byte, int> _activeKeyRefCounts = new();
+    private readonly System.Threading.Timer _staleKeyTimer;
+    private static readonly TimeSpan MaxKeyHoldDuration = TimeSpan.FromSeconds(20);
 
     private static readonly Dictionary<string, (byte vk, bool extended)> KeyMap = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -21,6 +27,7 @@ public class WindowsInputSimulator : IInputSimulator
         { "WIN", (0x5B, true) },
         { "WINDOWS", (0x5B, true) },
         { "LWIN", (0x5B, true) },
+        { "RWIN", (0x5C, true) },
 
         // Common Keys
         { "ENTER", (0x0D, false) },
@@ -51,6 +58,18 @@ public class WindowsInputSimulator : IInputSimulator
         { "ARROWLEFT", (0x25, true) },
         { "RIGHT", (0x27, true) },
         { "ARROWRIGHT", (0x27, true) },
+
+        // Lock & System Keys
+        { "CAPSLOCK", (0x14, false) },
+        { "CAPITAL", (0x14, false) },
+        { "NUMLOCK", (0x90, true) },
+        { "SCROLLLOCK", (0x91, false) },
+        { "SCROLL", (0x91, false) },
+        { "PRINTSCREEN", (0x2C, true) },
+        { "PRTSC", (0x2C, true) },
+        { "PAUSE", (0x13, false) },
+        { "APPS", (0x5D, true) },
+        { "CONTEXTMENU", (0x5D, true) },
 
         // Function Keys F1-F12
         { "F1", (0x70, false) },
@@ -84,7 +103,10 @@ public class WindowsInputSimulator : IInputSimulator
     public WindowsInputSimulator(ILogger<WindowsInputSimulator> logger)
     {
         _logger = logger;
+        _staleKeyTimer = new System.Threading.Timer(CheckStaleKeys, null, TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(2));
     }
+
+    public bool IsValidKey(string key) => !string.IsNullOrWhiteSpace(key) && KeyMap.ContainsKey(key.Trim());
 
     // ================= MOUSE CONTROLS =================
 
@@ -200,30 +222,111 @@ public class WindowsInputSimulator : IInputSimulator
         NativeMethods.SendInput((uint)inputs.Count, inputs.ToArray(), InputSize);
     }
 
-    public void KeyDown(string key)
+    public void KeyDown(string key, string? connectionId = null)
     {
-        if (!KeyMap.TryGetValue(key, out var mapping))
+        if (!KeyMap.TryGetValue(key.Trim(), out var mapping))
         {
             _logger.LogWarning("Unknown key requested for KeyDown: {Key}", key);
             return;
         }
 
-        _activeKeys.TryAdd(mapping.vk, true);
-        var input = CreateKeyInput(mapping.vk, isKeyUp: false, isExtended: mapping.extended);
-        NativeMethods.SendInput(1, new[] { input }, InputSize);
+        if (!string.IsNullOrEmpty(connectionId))
+        {
+            var connDict = _connectionKeys.GetOrAdd(connectionId, _ => new ConcurrentDictionary<byte, DateTime>());
+            connDict[mapping.vk] = DateTime.UtcNow;
+
+            int refCount = _activeKeyRefCounts.AddOrUpdate(mapping.vk, 1, (_, count) => count + 1);
+            if (refCount == 1)
+            {
+                var input = CreateKeyInput(mapping.vk, isKeyUp: false, isExtended: mapping.extended);
+                NativeMethods.SendInput(1, new[] { input }, InputSize);
+            }
+        }
+        else
+        {
+            _activeKeyRefCounts.AddOrUpdate(mapping.vk, 1, (_, count) => count + 1);
+            var input = CreateKeyInput(mapping.vk, isKeyUp: false, isExtended: mapping.extended);
+            NativeMethods.SendInput(1, new[] { input }, InputSize);
+        }
     }
 
-    public void KeyUp(string key)
+    public void KeyUp(string key, string? connectionId = null)
     {
-        if (!KeyMap.TryGetValue(key, out var mapping))
+        if (!KeyMap.TryGetValue(key.Trim(), out var mapping))
         {
             _logger.LogWarning("Unknown key requested for KeyUp: {Key}", key);
             return;
         }
 
-        _activeKeys.TryRemove(mapping.vk, out _);
-        var input = CreateKeyInput(mapping.vk, isKeyUp: true, isExtended: mapping.extended);
-        NativeMethods.SendInput(1, new[] { input }, InputSize);
+        if (!string.IsNullOrEmpty(connectionId))
+        {
+            if (_connectionKeys.TryGetValue(connectionId, out var connDict))
+            {
+                if (connDict.TryRemove(mapping.vk, out _))
+                {
+                    int remaining = _activeKeyRefCounts.AddOrUpdate(mapping.vk, 0, (_, count) => Math.Max(0, count - 1));
+                    if (remaining == 0)
+                    {
+                        var input = CreateKeyInput(mapping.vk, isKeyUp: true, isExtended: mapping.extended);
+                        NativeMethods.SendInput(1, new[] { input }, InputSize);
+                    }
+                }
+            }
+        }
+        else
+        {
+            _activeKeyRefCounts.AddOrUpdate(mapping.vk, 0, (_, count) => Math.Max(0, count - 1));
+            var input = CreateKeyInput(mapping.vk, isKeyUp: true, isExtended: mapping.extended);
+            NativeMethods.SendInput(1, new[] { input }, InputSize);
+        }
+    }
+
+    public void ReleaseConnectionKeys(string connectionId)
+    {
+        if (string.IsNullOrEmpty(connectionId)) return;
+
+        if (_connectionKeys.TryRemove(connectionId, out var heldKeys))
+        {
+            foreach (var vk in heldKeys.Keys)
+            {
+                int remaining = _activeKeyRefCounts.AddOrUpdate(vk, 0, (_, count) => Math.Max(0, count - 1));
+                if (remaining == 0)
+                {
+                    NativeMethods.keybd_event(vk, 0, NativeMethods.KEYEVENTF_KEYUP, UIntPtr.Zero);
+                }
+            }
+            _logger.LogInformation("Released {Count} held keys for disconnected client {ConnectionId}", heldKeys.Count, connectionId);
+        }
+    }
+
+    private void CheckStaleKeys(object? state)
+    {
+        try
+        {
+            var now = DateTime.UtcNow;
+            foreach (var (connId, keys) in _connectionKeys)
+            {
+                foreach (var (vk, pressTime) in keys)
+                {
+                    if (now - pressTime > MaxKeyHoldDuration)
+                    {
+                        if (keys.TryRemove(vk, out _))
+                        {
+                            int remaining = _activeKeyRefCounts.AddOrUpdate(vk, 0, (_, count) => Math.Max(0, count - 1));
+                            if (remaining == 0)
+                            {
+                                NativeMethods.keybd_event(vk, 0, NativeMethods.KEYEVENTF_KEYUP, UIntPtr.Zero);
+                            }
+                            _logger.LogWarning("Safety timeout: Auto-released stale key 0x{Vk:X2} for connection {ConnectionId}", vk, connId);
+                        }
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error checking stale keys");
+        }
     }
 
     public void ExecuteShortcut(string[] keys)
@@ -266,21 +369,17 @@ public class WindowsInputSimulator : IInputSimulator
 
     public void ReleaseAllKeys()
     {
-        // 1. Release all tracked active keys
-        foreach (var vk in _activeKeys.Keys)
-        {
-            NativeMethods.keybd_event(vk, 0, NativeMethods.KEYEVENTF_KEYUP, UIntPtr.Zero);
-        }
-        _activeKeys.Clear();
+        _connectionKeys.Clear();
+        _activeKeyRefCounts.Clear();
 
-        // 2. Unconditionally release critical modifiers to prevent sticky keys
+        // 1. Unconditionally release critical modifiers to prevent sticky keys
         byte[] criticalModifiers = { 0x11 /* Ctrl */, 0x12 /* Alt */, 0x10 /* Shift */, 0x5B /* LWin */, 0x5C /* RWin */ };
         foreach (var mod in criticalModifiers)
         {
             NativeMethods.keybd_event(mod, 0, NativeMethods.KEYEVENTF_KEYUP, UIntPtr.Zero);
         }
 
-        // Also release left mouse button if locked
+        // 2. Also release left mouse button if locked
         NativeMethods.mouse_event((uint)NativeMethods.MouseEventFlags.LEFTUP, 0, 0, 0, UIntPtr.Zero);
 
         _logger.LogInformation("All remote held keys and modifiers released safely.");
