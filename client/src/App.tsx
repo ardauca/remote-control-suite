@@ -5,8 +5,8 @@ import { ConnectionStatusCard } from './features/status/ConnectionStatusCard';
 import { NavigationBar, TabType } from './features/navigation/NavigationBar';
 import { FeaturePlaceholder } from './features/placeholders/FeaturePlaceholder';
 import { TouchpadView } from './features/touchpad/TouchpadView';
+import { MediaControlView } from './features/media/MediaControlView';
 import { 
-  PlaySquare, 
   Folder, 
   Settings, 
   Smartphone,
@@ -83,12 +83,7 @@ export const App: React.FC = () => {
         )}
 
         {activeTab === 'media' && (
-          <FeaturePlaceholder
-            title="Media & Volume Control"
-            phase="Phase 5"
-            description="Control Spotify, YouTube, VLC and system master volume using Windows Core Audio (WASAPI) and GSMTC."
-            icon={PlaySquare}
-          />
+          <MediaControlView />
         )}
 
         {activeTab === 'files' && (

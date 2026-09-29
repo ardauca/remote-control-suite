@@ -53,6 +53,8 @@ public static class Program
 
         // 4. Register Services
         builder.Services.AddSingleton<IInputSimulator, WindowsInputSimulator>();
+        builder.Services.AddSingleton<Platform.Audio.IAudioManager, Platform.Audio.WindowsAudioManager>();
+        builder.Services.AddSingleton<Platform.Media.IMediaManager, Platform.Media.WindowsMediaManager>();
         builder.Services.AddSingleton<AgentWebSocketManager>();
         builder.Services.AddCors(options =>
         {

@@ -58,4 +58,42 @@ export interface KeyboardShortcutPayload {
   keys: string[];
 }
 
+// Media & Volume Payloads (Phase 5)
+export interface VolumeSetMasterPayload {
+  volume: number; // 0 - 100
+  mute?: boolean;
+}
+
+export interface VolumeSetSessionPayload {
+  sessionId: string;
+  volume: number; // 0 - 100
+  mute?: boolean;
+}
+
+export interface AudioSessionItem {
+  id: string;
+  name: string;
+  processId: number;
+  volume: number; // 0 - 100
+  isMuted: boolean;
+}
+
+export interface VolumeStatePayload {
+  masterVolume: number; // 0 - 100
+  isMuted: boolean;
+  sessions: AudioSessionItem[];
+}
+
+export interface MediaActionPayload {
+  action: 'play' | 'pause' | 'playPause' | 'next' | 'previous' | 'stop';
+}
+
+export interface MediaNowPlayingPayload {
+  title: string;
+  artist: string;
+  album: string;
+  isPlaying: boolean;
+  sourceApp?: string;
+}
+
 export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'reconnecting';

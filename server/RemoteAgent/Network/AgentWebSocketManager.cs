@@ -8,7 +8,9 @@ using Microsoft.Extensions.Options;
 using RemoteAgent.Configuration;
 using RemoteAgent.Core;
 using RemoteAgent.Network.Protocol;
+using RemoteAgent.Platform.Audio;
 using RemoteAgent.Platform.Input;
+using RemoteAgent.Platform.Media;
 
 namespace RemoteAgent.Network;
 
@@ -17,6 +19,8 @@ public class AgentWebSocketManager
     private readonly ILogger<AgentWebSocketManager> _logger;
     private readonly AgentOptions _options;
     private readonly IInputSimulator _inputSimulator;
+    private readonly IAudioManager _audioManager;
+    private readonly IMediaManager _mediaManager;
     private readonly ConcurrentDictionary<string, WebSocket> _activeSockets = new();
     private readonly JsonSerializerOptions _jsonOptions = new()
     {
@@ -28,11 +32,29 @@ public class AgentWebSocketManager
     public AgentWebSocketManager(
         ILogger<AgentWebSocketManager> logger, 
         IOptions<AgentOptions> options,
-        IInputSimulator inputSimulator)
+        IInputSimulator inputSimulator,
+        IAudioManager audioManager,
+        IMediaManager mediaManager)
     {
         _logger = logger;
         _options = options.Value;
         _inputSimulator = inputSimulator;
+        _audioManager = audioManager;
+        _mediaManager = mediaManager;
+
+        // Broadcast real-time volume state changes to all connected iPhones
+        _audioManager.VolumeChanged += state =>
+        {
+            var envelope = MessageEnvelope<VolumeStatePayload>.Create("event", ActionTypes.VolumeState, state);
+            _ = BroadcastAsync(envelope);
+        };
+
+        // Broadcast real-time now-playing changes to all connected iPhones
+        _mediaManager.NowPlayingChanged += meta =>
+        {
+            var envelope = MessageEnvelope<MediaNowPlayingPayload>.Create("event", ActionTypes.MediaNowPlaying, meta);
+            _ = BroadcastAsync(envelope);
+        };
     }
 
     public int ActiveConnectionCount => _activeSockets.Count;
@@ -58,6 +80,13 @@ public class AgentWebSocketManager
             };
             var helloEnvelope = MessageEnvelope<ServerHelloPayload>.Create("event", ActionTypes.SystemHello, helloPayload);
             await SendJsonAsync(webSocket, helloEnvelope, CancellationToken.None);
+
+            // 2. Send initial volume and media states
+            var initialVol = _audioManager.GetVolumeState();
+            await SendJsonAsync(webSocket, MessageEnvelope<VolumeStatePayload>.Create("event", ActionTypes.VolumeState, initialVol), CancellationToken.None);
+
+            var initialMedia = await _mediaManager.GetNowPlayingAsync();
+            await SendJsonAsync(webSocket, MessageEnvelope<MediaNowPlayingPayload>.Create("event", ActionTypes.MediaNowPlaying, initialMedia), CancellationToken.None);
 
             // 2. Read loop
             var buffer = new byte[1024 * 16]; // 16 KB buffer
@@ -290,6 +319,59 @@ public class AgentWebSocketManager
 
                 case ActionTypes.KeyboardReleaseAll:
                     _inputSimulator.ReleaseConnectionKeys(connectionId);
+                    break;
+
+                // Volume & Audio Mixer (Phase 5)
+                case ActionTypes.VolumeRequestState:
+                    var currentVolState = _audioManager.GetVolumeState();
+                    await SendJsonAsync(webSocket, MessageEnvelope<VolumeStatePayload>.Create("event", ActionTypes.VolumeState, currentVolState), CancellationToken.None);
+                    break;
+
+                case ActionTypes.VolumeSetMaster:
+                    if (root.TryGetProperty("payload", out var setMasterPayload))
+                    {
+                        if (setMasterPayload.TryGetProperty("volume", out var volProp))
+                        {
+                            _audioManager.SetMasterVolume((float)volProp.GetDouble());
+                        }
+                        if (setMasterPayload.TryGetProperty("mute", out var muteProp))
+                        {
+                            _audioManager.SetMasterMute(muteProp.GetBoolean());
+                        }
+                    }
+                    break;
+
+                case ActionTypes.VolumeSetSession:
+                    if (root.TryGetProperty("payload", out var setSessionPayload))
+                    {
+                        var sessionId = setSessionPayload.TryGetProperty("sessionId", out var idProp) ? idProp.GetString() ?? "" : "";
+                        if (setSessionPayload.TryGetProperty("volume", out var volProp))
+                        {
+                            _audioManager.SetSessionVolume(sessionId, (float)volProp.GetDouble());
+                        }
+                        if (setSessionPayload.TryGetProperty("mute", out var muteProp))
+                        {
+                            _audioManager.SetSessionMute(sessionId, muteProp.GetBoolean());
+                        }
+                    }
+                    break;
+
+                // Media Control (Phase 5)
+                case ActionTypes.MediaRequestNowPlaying:
+                    var nowPlaying = await _mediaManager.GetNowPlayingAsync();
+                    await SendJsonAsync(webSocket, MessageEnvelope<MediaNowPlayingPayload>.Create("event", ActionTypes.MediaNowPlaying, nowPlaying), CancellationToken.None);
+                    break;
+
+                case ActionTypes.MediaAction:
+                    if (root.TryGetProperty("payload", out var mediaPayload) &&
+                        mediaPayload.TryGetProperty("action", out var mediaActionProp))
+                    {
+                        var act = mediaActionProp.GetString();
+                        if (!string.IsNullOrEmpty(act))
+                        {
+                            await _mediaManager.ExecuteMediaActionAsync(act);
+                        }
+                    }
                     break;
 
                 default:

@@ -88,3 +88,79 @@ public class KeyboardShortcutPayload
     [JsonPropertyName("keys")]
     public string[] Keys { get; set; } = Array.Empty<string>();
 }
+
+public class VolumeSetMasterPayload
+{
+    [JsonPropertyName("volume")]
+    public float Volume { get; set; } // 0 - 100
+
+    [JsonPropertyName("mute")]
+    public bool? Mute { get; set; }
+}
+
+public class VolumeSetSessionPayload
+{
+    [JsonPropertyName("sessionId")]
+    public string SessionId { get; set; } = string.Empty;
+
+    [JsonPropertyName("volume")]
+    public float Volume { get; set; } // 0 - 100
+
+    [JsonPropertyName("mute")]
+    public bool? Mute { get; set; }
+}
+
+public class AudioSessionItem
+{
+    [JsonPropertyName("id")]
+    public string Id { get; set; } = string.Empty;
+
+    [JsonPropertyName("name")]
+    public string Name { get; set; } = string.Empty;
+
+    [JsonPropertyName("processId")]
+    public int ProcessId { get; set; }
+
+    [JsonPropertyName("volume")]
+    public float Volume { get; set; }
+
+    [JsonPropertyName("isMuted")]
+    public bool IsMuted { get; set; }
+}
+
+public class VolumeStatePayload
+{
+    [JsonPropertyName("masterVolume")]
+    public float MasterVolume { get; set; }
+
+    [JsonPropertyName("isMuted")]
+    public bool IsMuted { get; set; }
+
+    [JsonPropertyName("sessions")]
+    public List<AudioSessionItem> Sessions { get; set; } = new();
+}
+
+public class MediaActionPayload
+{
+    [JsonPropertyName("action")]
+    public string Action { get; set; } = string.Empty; // play, pause, playPause, next, previous, stop
+}
+
+public class MediaNowPlayingPayload
+{
+    [JsonPropertyName("title")]
+    public string Title { get; set; } = string.Empty;
+
+    [JsonPropertyName("artist")]
+    public string Artist { get; set; } = string.Empty;
+
+    [JsonPropertyName("album")]
+    public string Album { get; set; } = string.Empty;
+
+    [JsonPropertyName("isPlaying")]
+    public bool IsPlaying { get; set; }
+
+    [JsonPropertyName("sourceApp")]
+    public string? SourceApp { get; set; }
+}
+

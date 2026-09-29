@@ -21,8 +21,16 @@ public static class ActionTypes
     public const string KeyboardShortcut = "keyboard.shortcut";
     public const string KeyboardReleaseAll = "keyboard.releaseAll";
 
-    // Future capabilities (Phase 5+)
+    // Media & Volume (Phase 5)
+    public const string VolumeSetMaster = "volume.setMaster";
+    public const string VolumeSetSession = "volume.setSession";
+    public const string VolumeRequestState = "volume.requestState";
+    public const string VolumeState = "volume.state";
+
     public const string MediaAction = "media.action";
-    public const string VolumeSet = "volume.set";
+    public const string MediaRequestNowPlaying = "media.requestNowPlaying";
+    public const string MediaNowPlaying = "media.nowPlaying";
+
+    // Power (Phase 6+)
     public const string PowerAction = "power.action";
 }

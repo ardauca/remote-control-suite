@@ -1,0 +1,264 @@
+import React, { useEffect } from 'react';
+import { useMediaStore } from '../../stores/mediaStore';
+import { wsClient } from '../../protocol/wsClient';
+import { 
+  Play, 
+  Pause, 
+  SkipBack, 
+  SkipForward, 
+  Square, 
+  Volume2, 
+  VolumeX, 
+  Volume1, 
+  Music, 
+  Sliders, 
+  RefreshCw,
+  AppWindow
+} from 'lucide-react';
+
+export const MediaControlView: React.FC = () => {
+  const { 
+    volumeState, 
+    nowPlaying, 
+    setMasterVolume, 
+    toggleMasterMute, 
+    setSessionVolume, 
+    toggleSessionMute, 
+    executeMediaAction 
+  } = useMediaStore();
+
+  // Poll / request state on mount
+  useEffect(() => {
+    wsClient.send('command', 'volume.requestState', {});
+    wsClient.send('command', 'media.requestNowPlaying', {});
+  }, []);
+
+  const masterVol = volumeState?.masterVolume ?? 50;
+  const isMuted = volumeState?.isMuted ?? false;
+  const sessions = volumeState?.sessions ?? [];
+
+  const handleMasterChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = parseFloat(e.target.value);
+    setMasterVolume(val);
+    if ('vibrate' in navigator) {
+      navigator.vibrate(5);
+    }
+  };
+
+  const handlePresetClick = (val: number) => {
+    setMasterVolume(val, val === 0);
+    if ('vibrate' in navigator) {
+      navigator.vibrate(10);
+    }
+  };
+
+  const refreshState = () => {
+    wsClient.send('command', 'volume.requestState', {});
+    wsClient.send('command', 'media.requestNowPlaying', {});
+    if ('vibrate' in navigator) {
+      navigator.vibrate(15);
+    }
+  };
+
+  return (
+    <div className="flex flex-col w-full h-full overflow-y-auto space-y-4 p-4 pb-24 select-none animate-fadeIn">
+      {/* 1. Header with Refresh */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-lg font-bold text-white flex items-center gap-2">
+            <Music className="w-5 h-5 text-brand-400" />
+            Media & Sound Mixer
+          </h2>
+          <p className="text-xs text-slate-400">Control Windows master sound, app volumes, and media</p>
+        </div>
+        <button
+          onClick={refreshState}
+          title="Refresh audio state"
+          className="p-2 rounded-xl bg-dark-800 hover:bg-dark-700 text-slate-400 hover:text-white border border-slate-700 active:scale-95 transition-all"
+        >
+          <RefreshCw className="w-4 h-4" />
+        </button>
+      </div>
+
+      {/* 2. Now Playing Glassmorphic Card */}
+      <div className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-slate-900/90 via-slate-800/80 to-dark-900/90 border border-slate-700/60 p-5 shadow-2xl backdrop-blur-xl">
+        <div className="flex items-center gap-4">
+          {/* Album Art / Icon */}
+          <div className="w-16 h-16 rounded-2xl bg-gradient-to-tr from-brand-600 to-indigo-600 flex items-center justify-center shadow-lg shadow-brand-500/20 flex-shrink-0">
+            <Music className="w-8 h-8 text-white animate-pulse" />
+          </div>
+
+          {/* Track Info */}
+          <div className="flex-1 min-w-0">
+            <div className="text-[10px] uppercase font-bold tracking-wider text-brand-400 mb-0.5 truncate">
+              {nowPlaying?.sourceApp ? nowPlaying.sourceApp : 'Windows Media'}
+            </div>
+            <h3 className="text-base font-bold text-white truncate leading-tight">
+              {nowPlaying?.title || 'No active media playing'}
+            </h3>
+            <p className="text-xs text-slate-400 truncate mt-0.5">
+              {nowPlaying?.artist || (nowPlaying?.title ? 'Unknown Artist' : 'Play a track in Spotify, YouTube or Browser')}
+            </p>
+          </div>
+        </div>
+
+        {/* Playback Controls */}
+        <div className="flex items-center justify-center gap-4 mt-5">
+          <button
+            onClick={() => executeMediaAction('previous')}
+            className="p-3 rounded-2xl bg-slate-800/80 hover:bg-slate-700 text-slate-200 active:scale-90 transition-all border border-slate-700"
+            title="Previous Track"
+          >
+            <SkipBack className="w-5 h-5" />
+          </button>
+
+          <button
+            onClick={() => executeMediaAction('playPause')}
+            className="p-4 rounded-2xl bg-gradient-to-r from-brand-500 to-indigo-500 hover:from-brand-600 hover:to-indigo-600 text-white shadow-xl shadow-brand-500/25 active:scale-95 transition-all"
+            title="Play / Pause"
+          >
+            {nowPlaying?.isPlaying ? (
+              <Pause className="w-6 h-6 fill-current" />
+            ) : (
+              <Play className="w-6 h-6 fill-current ml-0.5" />
+            )}
+          </button>
+
+          <button
+            onClick={() => executeMediaAction('next')}
+            className="p-3 rounded-2xl bg-slate-800/80 hover:bg-slate-700 text-slate-200 active:scale-90 transition-all border border-slate-700"
+            title="Next Track"
+          >
+            <SkipForward className="w-5 h-5" />
+          </button>
+
+          <button
+            onClick={() => executeMediaAction('stop')}
+            className="p-3 rounded-2xl bg-slate-800/80 hover:bg-slate-700 text-slate-400 hover:text-rose-400 active:scale-90 transition-all border border-slate-700"
+            title="Stop"
+          >
+            <Square className="w-4 h-4" />
+          </button>
+        </div>
+      </div>
+
+      {/* 3. Master Volume Card */}
+      <div className="bg-dark-800/80 rounded-3xl p-5 border border-slate-700/60 shadow-xl space-y-4">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2.5">
+            <button
+              onClick={toggleMasterMute}
+              className={`p-2.5 rounded-2xl border transition-all ${
+                isMuted
+                  ? 'bg-rose-500/20 text-rose-400 border-rose-500/40'
+                  : 'bg-brand-500/20 text-brand-300 border-brand-500/40'
+              }`}
+            >
+              {isMuted ? <VolumeX className="w-5 h-5" /> : masterVol < 30 ? <Volume1 className="w-5 h-5" /> : <Volume2 className="w-5 h-5" />}
+            </button>
+            <div>
+              <div className="text-xs font-semibold text-slate-400">Master Volume</div>
+              <div className="text-lg font-bold text-white font-mono">
+                {isMuted ? 'MUTED' : `${Math.round(masterVol)}%`}
+              </div>
+            </div>
+          </div>
+
+          {/* Quick Presets */}
+          <div className="flex items-center gap-1.5">
+            {[0, 25, 50, 75, 100].map((preset) => (
+              <button
+                key={preset}
+                onClick={() => handlePresetClick(preset)}
+                className={`px-2 py-1 rounded-xl text-[10px] font-bold border transition-colors ${
+                  !isMuted && Math.round(masterVol) === preset
+                    ? 'bg-brand-500 text-white border-brand-400'
+                    : 'bg-dark-900 text-slate-400 border-slate-700 hover:text-white'
+                }`}
+              >
+                {preset === 0 ? 'Mute' : `${preset}%`}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Master Slider */}
+        <input
+          type="range"
+          min="0"
+          max="100"
+          step="1"
+          value={isMuted ? 0 : masterVol}
+          onChange={handleMasterChange}
+          className="w-full h-3 bg-dark-900 rounded-lg appearance-none cursor-pointer accent-brand-500"
+        />
+      </div>
+
+      {/* 4. Windows Volume Mixer (App Sessions) */}
+      <div className="bg-dark-800/80 rounded-3xl p-5 border border-slate-700/60 shadow-xl space-y-3.5">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2 text-xs font-bold text-slate-300 uppercase tracking-wider">
+            <Sliders className="w-4 h-4 text-emerald-400" />
+            Active Application Mixer
+          </div>
+          <span className="text-[10px] text-slate-500 font-mono">
+            {sessions.length} active app(s)
+          </span>
+        </div>
+
+        {sessions.length === 0 ? (
+          <div className="py-6 text-center text-xs text-slate-500">
+            No running applications currently emitting audio.
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {sessions.map((session) => (
+              <div
+                key={session.id}
+                className="bg-dark-900/80 rounded-2xl p-3 border border-slate-700/50 space-y-2"
+              >
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <AppWindow className="w-4 h-4 text-slate-400 flex-shrink-0" />
+                    <span className="text-xs font-semibold text-slate-200 truncate">
+                      {session.name}
+                    </span>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <span className="text-[11px] font-mono text-slate-400">
+                      {session.isMuted ? 'Muted' : `${Math.round(session.volume)}%`}
+                    </span>
+                    <button
+                      onClick={() => toggleSessionMute(session.id)}
+                      className={`p-1.5 rounded-lg border text-xs transition-colors ${
+                        session.isMuted
+                          ? 'bg-rose-500/20 text-rose-400 border-rose-500/40'
+                          : 'bg-dark-800 text-slate-400 border-slate-700 hover:text-white'
+                      }`}
+                    >
+                      {session.isMuted ? <VolumeX className="w-3.5 h-3.5" /> : <Volume2 className="w-3.5 h-3.5" />}
+                    </button>
+                  </div>
+                </div>
+
+                <input
+                  type="range"
+                  min="0"
+                  max="100"
+                  step="1"
+                  value={session.isMuted ? 0 : session.volume}
+                  onChange={(e) => {
+                    const val = parseFloat(e.target.value);
+                    setSessionVolume(session.id, val);
+                  }}
+                  className="w-full h-2 bg-dark-800 rounded-lg appearance-none cursor-pointer accent-emerald-500"
+                />
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};

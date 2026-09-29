@@ -1,5 +1,6 @@
-import { MessageEnvelope, ServerHelloPayload, PongPayload } from './protocolTypes';
+import { MessageEnvelope, ServerHelloPayload, PongPayload, VolumeStatePayload, MediaNowPlayingPayload } from './protocolTypes';
 import { useConnectionStore } from '../stores/connectionStore';
+import { useMediaStore } from '../stores/mediaStore';
 
 type MessageHandler = (envelope: MessageEnvelope) => void;
 
@@ -127,6 +128,12 @@ class WebSocketClient {
         const rtt = Math.max(0, now - pong.clientTime);
         useConnectionStore.getState().setLatency(rtt);
         useConnectionStore.getState().setLastHeartbeat(now);
+      } else if (envelope.action === 'volume.state') {
+        const vol = envelope.payload as VolumeStatePayload;
+        useMediaStore.getState().setVolumeState(vol);
+      } else if (envelope.action === 'media.nowPlaying') {
+        const media = envelope.payload as MediaNowPlayingPayload;
+        useMediaStore.getState().setNowPlaying(media);
       }
 
       // Notify registered custom action listeners

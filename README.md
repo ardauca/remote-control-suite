@@ -121,6 +121,9 @@ node scripts/verify-mouse.js
 
 # Verify Unicode text injection, special keys, shortcuts, and safety release
 node scripts/verify-keyboard.js
+
+# Verify Windows WASAPI master volume, application mixer, and GSMTC media control
+node scripts/verify-media-volume.js
 ```
 
 ---
@@ -131,7 +134,7 @@ node scripts/verify-keyboard.js
 - [x] **Phase 1:** Core .NET 9 Kestrel agent, System Tray, React 19 PWA, heartbeat & auto-reconnect.
 - [x] **Phase 3:** High-precision relative mouse control, multi-touch gestures, drag lock, and haptics.
 - [x] **Phase 4:** Virtual keyboard, Unicode text input, modifier engine, quick shortcuts, custom macros.
-- [ ] **Phase 5:** Windows Media Control & Volume Mixer (WASAPI & GSMTC session integration).
+- [x] **Phase 5:** Windows Media Control & Volume Mixer (WASAPI & GSMTC session integration).
 - [ ] **Phase 6:** Windows System Controls (Power/Sleep/Lock, Task Manager, Window Switcher).
 - [ ] **Phase 7:** Display Streamer & Ultra-Low Latency Screen Mirroring.
 
