@@ -22,7 +22,10 @@ public class AgentWebSocketManager
     private readonly IAudioManager _audioManager;
     private readonly IMediaManager _mediaManager;
     private readonly Platform.SystemControl.ISystemControlManager _systemControlManager;
+    private readonly Platform.Screen.ScreenStreamCoordinator _screenCoordinator;
+    private readonly Platform.Screen.IScreenCaptureEngine _screenCaptureEngine;
     private readonly ConcurrentDictionary<string, WebSocket> _activeSockets = new();
+    private readonly ConcurrentDictionary<string, bool> _authenticatedConnections = new();
     private readonly JsonSerializerOptions _jsonOptions = new()
     {
         PropertyNameCaseInsensitive = true
@@ -36,7 +39,9 @@ public class AgentWebSocketManager
         IInputSimulator inputSimulator,
         IAudioManager audioManager,
         IMediaManager mediaManager,
-        Platform.SystemControl.ISystemControlManager systemControlManager)
+        Platform.SystemControl.ISystemControlManager systemControlManager,
+        Platform.Screen.ScreenStreamCoordinator screenCoordinator,
+        Platform.Screen.IScreenCaptureEngine screenCaptureEngine)
     {
         _logger = logger;
         _options = options.Value;
@@ -44,6 +49,8 @@ public class AgentWebSocketManager
         _audioManager = audioManager;
         _mediaManager = mediaManager;
         _systemControlManager = systemControlManager;
+        _screenCoordinator = screenCoordinator;
+        _screenCaptureEngine = screenCaptureEngine;
 
         // Broadcast real-time volume state changes to all connected iPhones
         _audioManager.VolumeChanged += state =>
@@ -65,6 +72,16 @@ public class AgentWebSocketManager
             var envelope = MessageEnvelope<PowerStatusPayload>.Create("event", ActionTypes.PowerStatus, status);
             _ = BroadcastAsync(envelope);
         };
+
+        // Send screen telemetry updates to active streaming clients
+        _screenCoordinator.TelemetryUpdated += (connId, telemetry) =>
+        {
+            if (_activeSockets.TryGetValue(connId, out var sock) && sock.State == WebSocketState.Open)
+            {
+                var envelope = MessageEnvelope<ScreenTelemetryPayload>.Create("event", ActionTypes.ScreenTelemetry, telemetry);
+                _ = SendJsonAsync(sock, envelope, CancellationToken.None);
+            }
+        };
     }
 
     public int ActiveConnectionCount => _activeSockets.Count;
@@ -77,6 +94,10 @@ public class AgentWebSocketManager
         _activeSockets.TryAdd(connectionId, webSocket);
         _logger.LogInformation("WebSocket client connected. ID: {ConnectionId}, IP: {ClientIp}", connectionId, clientIp);
         ActiveConnectionsChanged?.Invoke(_activeSockets.Count);
+
+        bool isAuth = string.IsNullOrEmpty(_options.AuthToken) ||
+                      (context.Request.Query.TryGetValue("token", out var tokenVal) && tokenVal.ToString() == _options.AuthToken);
+        _authenticatedConnections[connectionId] = isAuth;
 
         try
         {
@@ -145,6 +166,8 @@ public class AgentWebSocketManager
         finally
         {
             _activeSockets.TryRemove(connectionId, out _);
+            _authenticatedConnections.TryRemove(connectionId, out _);
+            _screenCoordinator.StopStream(connectionId);
             _inputSimulator.ReleaseConnectionKeys(connectionId);
             if (_activeSockets.IsEmpty)
             {
@@ -453,7 +476,110 @@ public class AgentWebSocketManager
                     break;
 
                 case ActionTypes.PowerCancel:
+                    if (!IsAuthorized(connectionId)) { await SendUnauthorizedAsync(webSocket); return; }
                     _systemControlManager.CancelScheduledShutdown();
+                    break;
+
+                // Auth & Pairing (WAN Security)
+                case ActionTypes.AuthLogin:
+                    if (root.TryGetProperty("payload", out var loginPayload) &&
+                        loginPayload.TryGetProperty("token", out var tokenProp))
+                    {
+                        var clientToken = tokenProp.GetString();
+                        bool ok = string.IsNullOrEmpty(_options.AuthToken) || clientToken == _options.AuthToken;
+                        _authenticatedConnections[connectionId] = ok;
+                        var res = new AuthResultPayload
+                        {
+                            Authenticated = ok,
+                            Message = ok ? "Authentication successful" : "Invalid auth token"
+                        };
+                        await SendJsonAsync(webSocket, MessageEnvelope<AuthResultPayload>.Create("response", ActionTypes.AuthResult, res), CancellationToken.None);
+                    }
+                    break;
+
+                // Screen Mirroring & Stream (Phase 7)
+                case ActionTypes.ScreenStart:
+                    if (!IsAuthorized(connectionId)) { await SendUnauthorizedAsync(webSocket); return; }
+                    var cfg = new ScreenStartPayload();
+                    if (root.TryGetProperty("payload", out var sStartPayload))
+                    {
+                        if (sStartPayload.TryGetProperty("fps", out var fpsP)) cfg.Fps = fpsP.GetInt32();
+                        if (sStartPayload.TryGetProperty("quality", out var qP)) cfg.Quality = qP.GetInt32();
+                        if (sStartPayload.TryGetProperty("scale", out var scP)) cfg.Scale = (float)scP.GetDouble();
+                        if (sStartPayload.TryGetProperty("monitorIndex", out var monP)) cfg.MonitorIndex = monP.GetInt32();
+                    }
+                    _screenCoordinator.StartStream(connectionId, webSocket, cfg);
+                    break;
+
+                case ActionTypes.ScreenStop:
+                    _screenCoordinator.StopStream(connectionId);
+                    break;
+
+                case ActionTypes.ScreenSnapshot:
+                    if (!IsAuthorized(connectionId)) { await SendUnauthorizedAsync(webSocket); return; }
+                    int monIdx = 0;
+                    float snapScale = 1.0f;
+                    int snapQuality = 85;
+                    if (root.TryGetProperty("payload", out var snapPayload))
+                    {
+                        if (snapPayload.TryGetProperty("monitorIndex", out var mP)) monIdx = mP.GetInt32();
+                        if (snapPayload.TryGetProperty("scale", out var sP)) snapScale = (float)sP.GetDouble();
+                        if (snapPayload.TryGetProperty("quality", out var qP)) snapQuality = qP.GetInt32();
+                    }
+                    var snapFrame = _screenCoordinator.CaptureSnapshot(monIdx, snapScale, snapQuality);
+                    if (snapFrame != null)
+                    {
+                        var packet = Platform.Screen.BinaryFrameHeader.Pack(snapFrame);
+                        await webSocket.SendAsync(new ArraySegment<byte>(packet), WebSocketMessageType.Binary, true, CancellationToken.None);
+                    }
+                    break;
+
+                case ActionTypes.ScreenTouch:
+                    if (!IsAuthorized(connectionId)) { await SendUnauthorizedAsync(webSocket); return; }
+                    if (root.TryGetProperty("payload", out var touchPayload))
+                    {
+                        float normX = touchPayload.TryGetProperty("normX", out var nxP) ? (float)nxP.GetDouble() : 0.5f;
+                        float normY = touchPayload.TryGetProperty("normY", out var nyP) ? (float)nyP.GetDouble() : 0.5f;
+                        string tType = touchPayload.TryGetProperty("type", out var ttP) ? ttP.GetString() ?? "click" : "click";
+                        string tBtn = touchPayload.TryGetProperty("button", out var tbP) ? tbP.GetString() ?? "left" : "left";
+
+                        var screens = System.Windows.Forms.Screen.AllScreens;
+                        var targetScreen = screens.Length > 0 ? screens[0] : null;
+                        if (targetScreen != null)
+                        {
+                            int absX = targetScreen.Bounds.X + (int)Math.Round(normX * targetScreen.Bounds.Width);
+                            int absY = targetScreen.Bounds.Y + (int)Math.Round(normY * targetScreen.Bounds.Height);
+
+                            _inputSimulator.MoveMouseAbsolute(absX, absY);
+
+                            switch (tType.ToLowerInvariant())
+                            {
+                                case "click":
+                                    _inputSimulator.MouseClick(tBtn, false);
+                                    break;
+                                case "double":
+                                    _inputSimulator.MouseClick(tBtn, true);
+                                    break;
+                                case "right":
+                                    _inputSimulator.MouseClick("right", false);
+                                    break;
+                                case "down":
+                                    _inputSimulator.MouseDown(tBtn);
+                                    break;
+                                case "up":
+                                    _inputSimulator.MouseUp(tBtn);
+                                    break;
+                                case "move":
+                                    // position already updated
+                                    break;
+                            }
+                        }
+                    }
+                    break;
+
+                case ActionTypes.ScreenMonitors:
+                    var monitors = _screenCaptureEngine.GetMonitors();
+                    await SendJsonAsync(webSocket, MessageEnvelope<List<Platform.Screen.ScreenMonitorInfo>>.Create("response", ActionTypes.ScreenMonitors, monitors), CancellationToken.None);
                     break;
 
                 default:
@@ -492,5 +618,21 @@ public class AgentWebSocketManager
             .Where(s => s.State == WebSocketState.Open)
             .Select(s => SendJsonAsync(s, envelope, cancellationToken));
         await Task.WhenAll(tasks);
+    }
+
+    private bool IsAuthorized(string connectionId)
+    {
+        if (string.IsNullOrEmpty(_options.AuthToken)) return true;
+        return _authenticatedConnections.TryGetValue(connectionId, out var auth) && auth;
+    }
+
+    private Task SendUnauthorizedAsync(WebSocket socket)
+    {
+        var err = new ErrorPayload
+        {
+            Code = "UNAUTHORIZED",
+            Message = "Authentication required for this operation"
+        };
+        return SendJsonAsync(socket, MessageEnvelope<ErrorPayload>.Create("response", ActionTypes.SystemError, err), CancellationToken.None);
     }
 }

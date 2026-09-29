@@ -198,4 +198,79 @@ public class PowerStatusPayload
     public DateTime? TargetTimeUtc { get; set; }
 }
 
+// Auth & Security
+public class AuthLoginPayload
+{
+    [JsonPropertyName("token")]
+    public string Token { get; set; } = string.Empty;
+}
+
+public class AuthResultPayload
+{
+    [JsonPropertyName("authenticated")]
+    public bool Authenticated { get; set; }
+
+    [JsonPropertyName("message")]
+    public string Message { get; set; } = string.Empty;
+}
+
+// Screen Mirroring & Stream (Phase 7)
+public class ScreenStartPayload
+{
+    [JsonPropertyName("fps")]
+    public int Fps { get; set; } = 10; // 5 - 30
+
+    [JsonPropertyName("quality")]
+    public int Quality { get; set; } = 60; // 20 - 90
+
+    [JsonPropertyName("scale")]
+    public float Scale { get; set; } = 0.66f; // 0.5 - 1.0
+
+    [JsonPropertyName("monitorIndex")]
+    public int MonitorIndex { get; set; } = 0;
+}
+
+public class ScreenTouchPayload
+{
+    [JsonPropertyName("normX")]
+    public float NormX { get; set; } // 0.0 - 1.0
+
+    [JsonPropertyName("normY")]
+    public float NormY { get; set; } // 0.0 - 1.0
+
+    [JsonPropertyName("type")]
+    public string Type { get; set; } = "click"; // click, double, right, down, up, move
+
+    [JsonPropertyName("button")]
+    public string Button { get; set; } = "left"; // left, right, middle
+}
+
+public class ScreenTelemetryPayload
+{
+    [JsonPropertyName("actualFps")]
+    public int ActualFps { get; set; }
+
+    [JsonPropertyName("droppedFrames")]
+    public int DroppedFrames { get; set; }
+
+    [JsonPropertyName("bytesPerSecond")]
+    public long BytesPerSecond { get; set; }
+
+    [JsonPropertyName("estimatedMbPerMinute")]
+    public double EstimatedMbPerMinute { get; set; }
+
+    [JsonPropertyName("estimatedGbPerHour")]
+    public double EstimatedGbPerHour { get; set; }
+
+    [JsonPropertyName("queueDepth")]
+    public int QueueDepth { get; set; }
+
+    [JsonPropertyName("captureDurationMs")]
+    public long CaptureDurationMs { get; set; }
+
+    [JsonPropertyName("sendDurationMs")]
+    public long SendDurationMs { get; set; }
+}
+
+
 

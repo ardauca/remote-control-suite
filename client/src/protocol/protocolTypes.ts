@@ -125,4 +125,58 @@ export interface PowerStatusPayload {
   targetTimeUtc?: string;
 }
 
+// Auth & Security
+export interface AuthLoginPayload {
+  token: string;
+}
+
+export interface AuthResultPayload {
+  authenticated: boolean;
+  message: string;
+}
+
+// Screen Mirroring & Stream (Phase 7)
+export interface ScreenStartPayload {
+  fps: number;
+  quality: number;
+  scale: number;
+  monitorIndex: number;
+}
+
+export interface ScreenTouchPayload {
+  normX: number;
+  normY: number;
+  type: 'click' | 'double' | 'right' | 'down' | 'up' | 'move';
+  button?: 'left' | 'right' | 'middle';
+}
+
+export interface ScreenTelemetryPayload {
+  actualFps: number;
+  droppedFrames: number;
+  bytesPerSecond: number;
+  estimatedMbPerMinute: number;
+  estimatedGbPerHour: number;
+  queueDepth: number;
+  captureDurationMs: number;
+  sendDurationMs: number;
+}
+
+export interface ScreenMonitorInfo {
+  index: number;
+  deviceName: string;
+  width: number;
+  height: number;
+  isPrimary: boolean;
+}
+
+export interface DecodedBinaryFrame {
+  sequenceNumber: number;
+  desktopWidth: number;
+  desktopHeight: number;
+  normCursorX: number; // 0.0 - 1.0
+  normCursorY: number; // 0.0 - 1.0
+  cursorVisible: boolean;
+  imageBlob: Blob;
+}
+
 export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'reconnecting';

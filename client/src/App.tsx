@@ -3,12 +3,11 @@ import { wsClient } from './protocol/wsClient';
 import { useConnectionStore } from './stores/connectionStore';
 import { ConnectionStatusCard } from './features/status/ConnectionStatusCard';
 import { NavigationBar, TabType } from './features/navigation/NavigationBar';
-import { FeaturePlaceholder } from './features/placeholders/FeaturePlaceholder';
 import { TouchpadView } from './features/touchpad/TouchpadView';
+import { ScreenView } from './features/screen/ScreenView';
 import { MediaControlView } from './features/media/MediaControlView';
 import { PowerSystemView } from './features/power/PowerSystemView';
 import { 
-  Folder, 
   Smartphone,
   CheckCircle
 } from 'lucide-react';
@@ -56,7 +55,7 @@ export const App: React.FC = () => {
       </header>
 
       {/* Main View Area */}
-      <main className={`flex-1 ${activeTab === 'remote' ? 'overflow-hidden p-2 flex flex-col touch-none' : 'overflow-y-auto px-4 py-4 space-y-4'}`}>
+      <main className={`flex-1 ${activeTab === 'remote' || activeTab === 'screen' ? 'overflow-hidden p-2 flex flex-col touch-none' : 'overflow-y-auto px-4 py-4 space-y-4'}`}>
         {activeTab === 'home' && (
           <div className="max-w-md mx-auto space-y-4">
             <ConnectionStatusCard />
@@ -65,14 +64,16 @@ export const App: React.FC = () => {
             <div className="bg-dark-800/50 rounded-2xl p-4 border border-slate-800 text-xs space-y-2">
               <h3 className="font-semibold text-slate-200 flex items-center gap-1.5">
                 <CheckCircle className="w-4 h-4 text-emerald-400" />
-                Phase 1 Acceptance Milestones
+                Phase 1-7 Acceptance Milestones
               </h3>
               <ul className="text-slate-400 space-y-1.5 list-disc list-inside">
                 <li>.NET 9 Windows Agent with Kestrel Web/WS server running</li>
                 <li>Real-time bidirectional WebSocket at <code className="text-brand-400">/ws</code></li>
-                <li>Automatic Heartbeat (3s) & sub-millisecond LAN latency measurement</li>
-                <li>Exponential backoff auto-reconnect on socket drop</li>
-                <li>Instant reconnection on iOS Safari resume (<code className="text-cyan-400">visibilitychange</code>)</li>
+                <li>Virtual Trackpad & Gesture Mouse Control (Phase 3)</li>
+                <li>Raw & Unicode Keyboard Input with IME Support (Phase 4)</li>
+                <li>WASAPI Volume, Per-App Audio & GSMTC Now Playing Media (Phase 5)</li>
+                <li>System Power & Timed Shutdown Scheduler (Phase 6)</li>
+                <li>Ultra-Low Latency Screen Mirroring & Remote Touch (Phase 7)</li>
               </ul>
             </div>
           </div>
@@ -82,17 +83,12 @@ export const App: React.FC = () => {
           <TouchpadView />
         )}
 
-        {activeTab === 'media' && (
-          <MediaControlView />
+        {activeTab === 'screen' && (
+          <ScreenView />
         )}
 
-        {activeTab === 'files' && (
-          <FeaturePlaceholder
-            title="Sandboxed File Manager"
-            phase="Phase 9"
-            description="Browse drives, download, upload and manage files securely with strict root isolation and path traversal protection."
-            icon={Folder}
-          />
+        {activeTab === 'media' && (
+          <MediaControlView />
         )}
 
         {activeTab === 'more' && (

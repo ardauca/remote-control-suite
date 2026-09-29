@@ -1,7 +1,7 @@
 import React from 'react';
-import { Home, MousePointer, PlaySquare, Folder, Power } from 'lucide-react';
+import { Home, MousePointer, Monitor, PlaySquare, Power } from 'lucide-react';
 
-export type TabType = 'home' | 'remote' | 'media' | 'files' | 'more';
+export type TabType = 'home' | 'remote' | 'screen' | 'media' | 'more';
 
 interface NavigationBarProps {
   activeTab: TabType;
@@ -12,8 +12,8 @@ export const NavigationBar: React.FC<NavigationBarProps> = ({ activeTab, onTabCh
   const tabs = [
     { id: 'home' as TabType, label: 'Home', icon: Home },
     { id: 'remote' as TabType, label: 'Remote', icon: MousePointer },
+    { id: 'screen' as TabType, label: 'Screen', icon: Monitor },
     { id: 'media' as TabType, label: 'Media', icon: PlaySquare },
-    { id: 'files' as TabType, label: 'Files', icon: Folder },
     { id: 'more' as TabType, label: 'Power', icon: Power },
   ];
 

@@ -119,6 +119,11 @@ public class WindowsInputSimulator : IInputSimulator
         NativeMethods.mouse_event((uint)NativeMethods.MouseEventFlags.MOVE, dx, dy, 0, UIntPtr.Zero);
     }
 
+    public void MoveMouseAbsolute(int x, int y)
+    {
+        NativeMethods.SetCursorPos(x, y);
+    }
+
     public void MouseDown(string button)
     {
         uint flag = button.ToLowerInvariant() switch

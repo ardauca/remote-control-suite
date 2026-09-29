@@ -37,4 +37,16 @@ public static class ActionTypes
     public const string PowerCancel = "power.cancel";
     public const string PowerRequestStatus = "power.requestStatus";
     public const string PowerStatus = "power.status";
+
+    // Auth & Pairing (WAN Security)
+    public const string AuthLogin = "auth.login";
+    public const string AuthResult = "auth.result";
+
+    // Screen Mirroring & Stream (Phase 7)
+    public const string ScreenStart = "screen.start";
+    public const string ScreenStop = "screen.stop";
+    public const string ScreenSnapshot = "screen.snapshot";
+    public const string ScreenTouch = "screen.touch";
+    public const string ScreenTelemetry = "screen.telemetry";
+    public const string ScreenMonitors = "screen.monitors";
 }

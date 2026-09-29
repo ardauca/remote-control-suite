@@ -56,6 +56,8 @@ public static class Program
         builder.Services.AddSingleton<Platform.Audio.IAudioManager, Platform.Audio.WindowsAudioManager>();
         builder.Services.AddSingleton<Platform.Media.IMediaManager, Platform.Media.WindowsMediaManager>();
         builder.Services.AddSingleton<Platform.SystemControl.ISystemControlManager, Platform.SystemControl.WindowsSystemControlManager>();
+        builder.Services.AddSingleton<Platform.Screen.IScreenCaptureEngine, Platform.Screen.GdiScreenCaptureEngine>();
+        builder.Services.AddSingleton<Platform.Screen.ScreenStreamCoordinator>();
         builder.Services.AddSingleton<AgentWebSocketManager>();
         builder.Services.AddCors(options =>
         {
@@ -125,6 +127,40 @@ public static class Program
                 localIps = ips,
                 port = agentOptions.Port
             });
+        });
+
+        // Screen Snapshot endpoint (Secured with token when configured)
+        app.MapGet("/api/screen/snapshot", (HttpContext context, Platform.Screen.ScreenStreamCoordinator coordinator, IOptions<AgentOptions> options) =>
+        {
+            var configuredToken = options.Value.AuthToken;
+            if (!string.IsNullOrEmpty(configuredToken))
+            {
+                var authHeader = context.Request.Headers["Authorization"].ToString();
+                var queryToken = context.Request.Query["token"].ToString();
+                bool authorized = queryToken == configuredToken || 
+                                  (!string.IsNullOrEmpty(authHeader) && authHeader.EndsWith(configuredToken, StringComparison.Ordinal));
+                if (!authorized)
+                {
+                    return Results.Unauthorized();
+                }
+            }
+
+            int monitor = 0;
+            if (context.Request.Query.TryGetValue("monitor", out var mVal) && int.TryParse(mVal, out var m)) monitor = m;
+
+            float scale = 1.0f;
+            if (context.Request.Query.TryGetValue("scale", out var sVal) && float.TryParse(sVal, System.Globalization.CultureInfo.InvariantCulture, out var s)) scale = s;
+
+            int quality = 85;
+            if (context.Request.Query.TryGetValue("quality", out var qVal) && int.TryParse(qVal, out var q)) quality = q;
+
+            var frame = coordinator.CaptureSnapshot(monitor, scale, quality);
+            if (frame == null)
+            {
+                return Results.Problem("Failed to capture screen", statusCode: 500);
+            }
+
+            return Results.File(frame.Data, "image/jpeg");
         });
 
         // WebSocket endpoint

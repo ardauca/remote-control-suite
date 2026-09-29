@@ -1,7 +1,8 @@
-import { MessageEnvelope, ServerHelloPayload, PongPayload, VolumeStatePayload, MediaNowPlayingPayload, PowerStatusPayload } from './protocolTypes';
+import { MessageEnvelope, ServerHelloPayload, PongPayload, VolumeStatePayload, MediaNowPlayingPayload, PowerStatusPayload, ScreenTelemetryPayload } from './protocolTypes';
 import { useConnectionStore } from '../stores/connectionStore';
 import { useMediaStore } from '../stores/mediaStore';
 import { usePowerStore } from '../stores/powerStore';
+import { useScreenStore } from '../stores/screenStore';
 
 type MessageHandler = (envelope: MessageEnvelope) => void;
 
@@ -10,6 +11,7 @@ class WebSocketClient {
   private heartbeatTimer: number | null = null;
   private reconnectTimer: number | null = null;
   private handlers = new Map<string, Set<MessageHandler>>();
+  private binaryHandlers = new Set<(buffer: ArrayBuffer) => void>();
   private isManuallyClosed = false;
 
   private readonly MIN_RECONNECT_DELAY = 1000;
@@ -49,6 +51,7 @@ class WebSocketClient {
 
     try {
       this.socket = new WebSocket(url);
+      this.socket.binaryType = 'arraybuffer';
 
       this.socket.onopen = this.handleOpen.bind(this);
       this.socket.onmessage = this.handleMessage.bind(this);
@@ -105,6 +108,13 @@ class WebSocketClient {
     };
   }
 
+  public onBinary(handler: (buffer: ArrayBuffer) => void) {
+    this.binaryHandlers.add(handler);
+    return () => {
+      this.binaryHandlers.delete(handler);
+    };
+  }
+
   private handleOpen() {
     const store = useConnectionStore.getState();
     store.setStatus('connected');
@@ -116,6 +126,13 @@ class WebSocketClient {
 
   private handleMessage(event: MessageEvent) {
     try {
+      // Check for binary messages (e.g. Screen Mirroring JPEG frames)
+      if (typeof event.data !== 'string') {
+        const buffer = event.data as ArrayBuffer;
+        this.binaryHandlers.forEach((handler) => handler(buffer));
+        return;
+      }
+
       const envelope = JSON.parse(event.data) as MessageEnvelope;
 
       // Built-in protocol actions
@@ -138,6 +155,9 @@ class WebSocketClient {
       } else if (envelope.action === 'power.status') {
         const power = envelope.payload as PowerStatusPayload;
         usePowerStore.getState().setPowerStatus(power);
+      } else if (envelope.action === 'screen.telemetry') {
+        const telemetry = envelope.payload as ScreenTelemetryPayload;
+        useScreenStore.getState().setTelemetry(telemetry);
       }
 
       // Notify registered custom action listeners
