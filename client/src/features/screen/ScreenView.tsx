@@ -9,7 +9,6 @@ import {
   ZoomIn, 
   ZoomOut, 
   Maximize2, 
-  Activity, 
   Wifi, 
   Smartphone, 
   Sliders, 
@@ -17,7 +16,8 @@ import {
   ChevronDown,
   ChevronUp,
   RotateCw,
-  X
+  X,
+  Settings
 } from 'lucide-react';
 
 export const ScreenView: React.FC = () => {
@@ -43,12 +43,10 @@ export const ScreenView: React.FC = () => {
   const [desktopDims, setDesktopDims] = useState<{ width: number; height: number }>({ width: 1920, height: 1080 });
   const [boxDims, setBoxDims] = useState<{ width: number; height: number }>({ width: 320, height: 180 });
 
-  // Fullscreen, Rotation & UI controls state
+  // Fullscreen, Rotation & Quick Menu state
   const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
   const [isRotated90, setIsRotated90] = useState<boolean>(false);
-  const [controlsVisible, setControlsVisible] = useState<boolean>(true);
-  const controlsTimerRef = useRef<number | null>(null);
-  const [showFullTelemetry, setShowFullTelemetry] = useState<boolean>(false);
+  const [isMenuOpen, setIsMenuOpen] = useState<boolean>(false);
   const [showNormalTelemetry, setShowNormalTelemetry] = useState<boolean>(false);
 
   // Zoom & Pan state
@@ -64,31 +62,12 @@ export const ScreenView: React.FC = () => {
     if ('vibrate' in navigator) navigator.vibrate(ms);
   };
 
-  // Auto-hide controls in Fullscreen mode (after 3.5s inactivity)
-  const resetControlsTimeout = useCallback(() => {
-    setControlsVisible(true);
-    if (controlsTimerRef.current) {
-      window.clearTimeout(controlsTimerRef.current);
-    }
-    if (isFullscreen) {
-      controlsTimerRef.current = window.setTimeout(() => {
-        setControlsVisible(false);
-      }, 3500);
-    }
-  }, [isFullscreen]);
-
   // Handle Fullscreen toggle
   const toggleFullscreen = useCallback(() => {
     vibrate(15);
     setIsFullscreen((prev) => {
       const next = !prev;
-      setControlsVisible(true);
-      if (next) {
-        if (controlsTimerRef.current) window.clearTimeout(controlsTimerRef.current);
-        controlsTimerRef.current = window.setTimeout(() => setControlsVisible(false), 3500);
-      } else {
-        if (controlsTimerRef.current) window.clearTimeout(controlsTimerRef.current);
-      }
+      setIsMenuOpen(false);
       return next;
     });
   }, []);
@@ -208,7 +187,6 @@ export const ScreenView: React.FC = () => {
       document.removeEventListener('visibilitychange', handleVisibility);
       stopStream();
       if (longPressTimerRef.current) window.clearTimeout(longPressTimerRef.current);
-      if (controlsTimerRef.current) window.clearTimeout(controlsTimerRef.current);
     };
   }, [handleBinaryFrame, startStream, stopStream, requestSnapshot, activePreset]);
 
@@ -241,10 +219,6 @@ export const ScreenView: React.FC = () => {
 
   // 3. Touch interaction handlers on the PC Screen
   const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (isFullscreen) {
-      resetControlsTimeout();
-    }
-
     if (isPanMode) return;
 
     const coords = getNormalizedCoords(e.clientX, e.clientY);
@@ -261,10 +235,6 @@ export const ScreenView: React.FC = () => {
   };
 
   const handlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (isFullscreen) {
-      resetControlsTimeout();
-    }
-
     if (isPanMode) {
       if (e.buttons === 1) {
         setPan((p) => ({ x: p.x + e.movementX, y: p.y + e.movementY }));
@@ -392,197 +362,186 @@ export const ScreenView: React.FC = () => {
   return (
     <>
       {/* ========================================================================= */}
-      {/* 1. FULLSCREEN MODE (Notch-safe, landscape-ready, auto-hiding controls)     */}
+      {/* 1. FULLSCREEN MODE (Zero Screen Obstruction, Collapsible Floating Menu)   */}
       {/* ========================================================================= */}
       {isFullscreen ? (
         <div 
           ref={wrapperRef}
           className="fixed inset-0 z-50 bg-black w-screen h-[100dvh] flex items-center justify-center overflow-hidden touch-none select-none animate-fadeIn"
-          onPointerDown={() => resetControlsTimeout()}
         >
-          {/* Main Canvas Component */}
+          {/* Main Canvas Component - 100% of PC Screen is Clickable */}
           {renderInteractiveCanvas()}
 
-          {/* Top Control Bar with Notch-Safe Spacing (Never hidden behind iPhone 11 notch) */}
-          <div 
+          {/* Minimal, Unobtrusive Floating Menu Trigger Button */}
+          {/* Sits safely in the corner letterbox area, taking near zero space */}
+          <button
             onPointerDown={(e) => e.stopPropagation()}
+            onClick={(e) => {
+              e.stopPropagation();
+              vibrate(10);
+              setIsMenuOpen(true);
+            }}
             style={{
               top: 'calc(env(safe-area-inset-top, 0px) + 12px)',
-              left: 'calc(env(safe-area-inset-left, 0px) + 12px)',
               right: 'calc(env(safe-area-inset-right, 0px) + 12px)',
             }}
-            className={`absolute z-30 flex items-center justify-between pointer-events-none transition-opacity duration-300 ${
-              controlsVisible ? 'opacity-100' : 'opacity-0'
-            }`}
+            className="absolute z-30 w-10 h-10 rounded-full bg-dark-900/60 hover:bg-dark-900/90 active:bg-dark-900/95 border border-slate-700/70 backdrop-blur-md flex items-center justify-center text-slate-300 hover:text-white shadow-2xl opacity-40 hover:opacity-100 active:opacity-100 transition-all active:scale-90"
+            title="Ekran Menüsü"
           >
-            {/* Top-Left: Minimal HUD Chip */}
-            <div 
-              onClick={(e) => {
-                e.stopPropagation();
-                setShowFullTelemetry(!showFullTelemetry);
-              }}
-              className="pointer-events-auto flex items-center gap-2 px-3.5 py-2.5 rounded-full bg-dark-900/90 backdrop-blur-xl border border-slate-700/80 text-xs font-mono text-slate-200 shadow-2xl cursor-pointer active:scale-95 transition-transform"
-            >
-              <span className={`w-2 h-2 rounded-full ${isStreaming ? 'bg-emerald-400 animate-pulse' : 'bg-slate-500'}`} />
-              <span className="font-bold text-white">{telemetry?.actualFps ?? 0} FPS</span>
-              <span className="text-slate-500">•</span>
-              <span className="text-cyan-400">
-                {telemetry?.bytesPerSecond ? `${Math.round(telemetry.bytesPerSecond / 1024)} KB/s` : '0 KB/s'}
-              </span>
-              <Activity className="w-3.5 h-3.5 text-slate-400 ml-0.5" />
-            </div>
+            <Settings className="w-5 h-5 text-cyan-400" />
+          </button>
 
-            {/* Top-Right: Rotate 90° & Exit Buttons */}
-            <div className="pointer-events-auto flex items-center gap-2">
-              {/* Rotate 90° / Landscape Toggle Button */}
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  vibrate(15);
-                  setIsRotated90((r) => !r);
-                }}
-                className={`flex items-center gap-1.5 px-3.5 py-2.5 rounded-full backdrop-blur-xl border text-xs font-semibold shadow-2xl active:scale-95 transition-all ${
-                  isRotated90 
-                    ? 'bg-brand-600 text-white border-brand-400 shadow-brand-500/40 ring-2 ring-brand-400/50' 
-                    : 'bg-dark-900/90 text-slate-200 hover:text-white border-slate-700/80'
-                }`}
-                title="Yatay / Dikey Görünümü Çevir"
-              >
-                <RotateCw className={`w-4 h-4 ${isRotated90 ? 'text-white' : 'text-amber-400'}`} />
-                <span className="font-bold">{isRotated90 ? 'Dikey Mod' : 'Yatay Çevir'}</span>
-              </button>
-
-              {/* Exit Fullscreen Button */}
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  toggleFullscreen();
-                }}
-                className="flex items-center gap-1.5 px-4 py-2.5 rounded-full bg-dark-900/90 backdrop-blur-xl border border-rose-500/40 text-xs font-bold text-rose-300 hover:text-white shadow-2xl active:scale-95 transition-all"
-                title="Tam Ekrandan Çık"
-              >
-                <X className="w-4 h-4 text-rose-400" />
-                <span>Çıkış</span>
-              </button>
-            </div>
-          </div>
-
-          {/* Detailed Fullscreen Telemetry Popover (Safe-Area Aware) */}
-          {showFullTelemetry && (
+          {/* Quick Controls Modal / Action Sheet (Only visible when requested) */}
+          {isMenuOpen && (
             <div 
               onPointerDown={(e) => e.stopPropagation()}
-              onClick={(e) => e.stopPropagation()}
-              style={{
-                top: 'calc(env(safe-area-inset-top, 0px) + 64px)',
-                left: 'calc(env(safe-area-inset-left, 0px) + 12px)',
-              }}
-              className="absolute z-40 p-3.5 bg-dark-900/95 backdrop-blur-2xl border border-slate-700 rounded-2xl shadow-2xl text-[11px] font-mono text-slate-300 space-y-2 min-w-[220px] animate-fadeIn"
+              onClick={() => setIsMenuOpen(false)}
+              className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-fadeIn"
             >
-              <div className="flex items-center justify-between font-bold text-white border-b border-slate-800 pb-1.5">
-                <span className="flex items-center gap-1.5">
-                  <Activity className="w-3.5 h-3.5 text-cyan-400" />
-                  CANLI TELEMETRİ
-                </span>
-                <button 
-                  onClick={() => setShowFullTelemetry(false)}
-                  className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800"
+              <div 
+                onClick={(e) => e.stopPropagation()}
+                className="w-full max-w-sm bg-dark-900/95 border border-slate-700/80 rounded-3xl p-5 shadow-2xl space-y-4 font-sans text-slate-100 animate-fadeIn"
+              >
+                {/* Modal Header */}
+                <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+                  <div className="flex items-center gap-2">
+                    <div className="w-8 h-8 rounded-xl bg-brand-600/30 border border-brand-500/40 flex items-center justify-center text-brand-400">
+                      <Sliders className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <h3 className="text-sm font-bold text-white">Ekran Kontrolleri</h3>
+                      <p className="text-[11px] text-slate-400">
+                        {desktopDims.width}x{desktopDims.height} • {telemetry?.actualFps ?? 0} FPS
+                      </p>
+                    </div>
+                  </div>
+
+                  <button
+                    onClick={() => setIsMenuOpen(false)}
+                    className="p-2 rounded-xl bg-slate-800 text-slate-400 hover:text-white active:scale-95 transition-all"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+
+                {/* Primary Quick Actions */}
+                <div className="grid grid-cols-2 gap-2.5">
+                  {/* Exit Fullscreen */}
+                  <button
+                    onClick={() => {
+                      setIsMenuOpen(false);
+                      toggleFullscreen();
+                    }}
+                    className="p-3.5 rounded-2xl bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/40 flex flex-col items-center justify-center gap-1.5 active:scale-95 transition-all shadow-lg"
+                  >
+                    <X className="w-5 h-5 text-rose-400" />
+                    <span className="text-xs font-bold">Tam Ekrandan Çık</span>
+                  </button>
+
+                  {/* Rotate 90° */}
+                  <button
+                    onClick={() => {
+                      vibrate(15);
+                      setIsRotated90((r) => !r);
+                    }}
+                    className={`p-3.5 rounded-2xl border flex flex-col items-center justify-center gap-1.5 active:scale-95 transition-all shadow-lg ${
+                      isRotated90 
+                        ? 'bg-brand-600 text-white border-brand-400 shadow-brand-500/30' 
+                        : 'bg-dark-800 text-slate-200 border-slate-700 hover:border-slate-600'
+                    }`}
+                  >
+                    <RotateCw className={`w-5 h-5 ${isRotated90 ? 'text-white' : 'text-amber-400'}`} />
+                    <span className="text-xs font-bold">{isRotated90 ? 'Dikey Mod' : '90° Yatay Çevir'}</span>
+                  </button>
+                </div>
+
+                {/* Zoom & Pan Controls */}
+                <div className="bg-dark-800/80 rounded-2xl p-3 border border-slate-800 space-y-2">
+                  <div className="text-[11px] font-bold text-slate-400 uppercase tracking-wider flex items-center justify-between">
+                    <span>Yakınlaştırma & Konum</span>
+                    <span className="font-mono text-cyan-400">{zoom.toFixed(1)}x</span>
+                  </div>
+                  <div className="flex items-center justify-between gap-2">
+                    <button
+                      onClick={() => handleZoomChange(-0.5)}
+                      className="flex-1 py-2.5 rounded-xl bg-dark-900 border border-slate-700 flex items-center justify-center text-slate-300 active:scale-95"
+                      title="Uzaklaştır"
+                    >
+                      <ZoomOut className="w-4 h-4" />
+                    </button>
+                    <button
+                      onClick={() => {
+                        vibrate(10);
+                        setZoom(1.0);
+                        setPan({ x: 0, y: 0 });
+                      }}
+                      className="px-3.5 py-2.5 rounded-xl bg-dark-900 border border-slate-700 text-xs font-mono font-bold text-slate-300 active:scale-95 hover:text-white"
+                      title="Sıfırla"
+                    >
+                      1.0x
+                    </button>
+                    <button
+                      onClick={() => handleZoomChange(0.5)}
+                      className="flex-1 py-2.5 rounded-xl bg-dark-900 border border-slate-700 flex items-center justify-center text-slate-300 active:scale-95"
+                      title="Yakınlaştır"
+                    >
+                      <ZoomIn className="w-4 h-4" />
+                    </button>
+                    <button
+                      onClick={() => {
+                        vibrate(10);
+                        setIsPanMode(!isPanMode);
+                      }}
+                      className={`px-3.5 py-2.5 rounded-xl border text-xs font-bold transition-all active:scale-95 ${
+                        isPanMode 
+                          ? 'bg-brand-500 text-white border-brand-400 shadow-md shadow-brand-500/25' 
+                          : 'bg-dark-900 text-slate-400 border-slate-700'
+                      }`}
+                      title={isPanMode ? 'Pan Modu Aktif' : 'Tıklama Modu'}
+                    >
+                      Pan
+                    </button>
+                  </div>
+                </div>
+
+                {/* Telemetry Summary */}
+                <div className="bg-dark-800/80 rounded-2xl p-3 border border-slate-800 space-y-1.5 text-xs font-mono">
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">Canlı FPS:</span>
+                    <span className="text-emerald-400 font-bold">{telemetry?.actualFps ?? 0} FPS</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">Bant Genişliği:</span>
+                    <span className="text-cyan-400 font-bold">
+                      {telemetry?.bytesPerSecond ? `${Math.round(telemetry.bytesPerSecond / 1024)} KB/s` : '0 KB/s'}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">Veri Tüketimi:</span>
+                    <span className="text-amber-400 font-bold">
+                      {telemetry?.estimatedMbPerMinute ? `~${telemetry.estimatedMbPerMinute} MB/dk` : '—'}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">Gecikme (İşlem):</span>
+                    <span>{telemetry?.captureDurationMs ?? 0} ms</span>
+                  </div>
+                </div>
+
+                {/* Return to Desktop Button */}
+                <button
+                  onClick={() => setIsMenuOpen(false)}
+                  className="w-full py-3 rounded-2xl bg-brand-600 hover:bg-brand-500 text-white text-xs font-bold shadow-lg shadow-brand-500/25 active:scale-95 transition-all text-center"
                 >
-                  <X className="w-3.5 h-3.5" />
+                  Masaüstüne Dön (Dokunarak Kullan)
                 </button>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-slate-400">Gerçek FPS:</span>
-                <span className="text-emerald-400 font-bold">{telemetry?.actualFps ?? 0}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-slate-400">Bant Genişliği:</span>
-                <span className="text-cyan-400 font-bold">
-                  {telemetry?.bytesPerSecond ? `${Math.round(telemetry.bytesPerSecond / 1024)} KB/s` : '0 KB/s'}
-                </span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-slate-400">Veri / Dakika:</span>
-                <span className="text-amber-400 font-bold">
-                  {telemetry?.estimatedMbPerMinute ? `~${telemetry.estimatedMbPerMinute} MB` : '—'}
-                </span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-slate-400">Tahmini / Saat:</span>
-                <span className="text-amber-300 font-bold">
-                  {telemetry?.estimatedGbPerHour ? `~${telemetry.estimatedGbPerHour} GB` : '—'}
-                </span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-slate-400">Atlanan Kare:</span>
-                <span className="text-rose-400 font-bold">{telemetry?.droppedFrames ?? 0}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-slate-400">Gecikme (İşlem):</span>
-                <span>{telemetry?.captureDurationMs ?? 0} ms</span>
               </div>
             </div>
           )}
-
-          {/* Bottom-Right Floating Zoom & Pan Controls (Safe-Area Aware) */}
-          <div 
-            onPointerDown={(e) => e.stopPropagation()}
-            style={{
-              bottom: 'calc(env(safe-area-inset-bottom, 0px) + 16px)',
-              right: 'calc(env(safe-area-inset-right, 0px) + 16px)',
-            }}
-            className={`absolute z-30 flex items-center gap-1 bg-dark-900/90 backdrop-blur-xl rounded-2xl p-1.5 border border-slate-700/80 shadow-2xl transition-opacity duration-300 ${
-              controlsVisible ? 'opacity-100' : 'opacity-0 pointer-events-none'
-            }`}
-          >
-            <button
-              onClick={() => handleZoomChange(-0.5)}
-              className="p-2.5 rounded-xl text-slate-300 hover:text-white active:scale-90 transition-transform"
-              title="Uzaklaştır"
-            >
-              <ZoomOut className="w-4 h-4" />
-            </button>
-
-            <button
-              onClick={() => {
-                vibrate(10);
-                setZoom(1.0);
-                setPan({ x: 0, y: 0 });
-              }}
-              className="px-2.5 py-1.5 rounded-lg text-xs font-mono font-bold text-slate-200 hover:text-cyan-400 active:scale-95 transition-all"
-              title="Zoom Sıfırla (1.0x)"
-            >
-              {zoom.toFixed(1)}x
-            </button>
-
-            <button
-              onClick={() => handleZoomChange(0.5)}
-              className="p-2.5 rounded-xl text-slate-300 hover:text-white active:scale-90 transition-transform"
-              title="Yakınlaştır"
-            >
-              <ZoomIn className="w-4 h-4" />
-            </button>
-
-            <div className="w-[1px] h-5 bg-slate-700 mx-0.5" />
-
-            <button
-              onClick={() => {
-                vibrate(10);
-                setIsPanMode(!isPanMode);
-              }}
-              className={`p-2.5 rounded-xl text-xs border transition-colors active:scale-90 ${
-                isPanMode 
-                  ? 'bg-brand-500 text-white border-brand-400 shadow-md shadow-brand-500/30' 
-                  : 'text-slate-400 border-transparent hover:text-white'
-              }`}
-              title={isPanMode ? 'Pan Modu Aktif (Sürükle)' : 'Dokunmatik Tık Modu'}
-            >
-              <Sliders className="w-4 h-4" />
-            </button>
-          </div>
         </div>
       ) : (
         /* ========================================================================= */
-        /* 2. NORMAL SCREEN VIEW (Optimized vertical space, compact cards)            */
+        /* 2. NORMAL SCREEN VIEW (Clean Canvas, Controls Above & Below Canvas)        */
         /* ========================================================================= */
         <div className="w-full flex flex-col space-y-3 select-none pb-6 animate-fadeIn">
           {/* Header Toolbar */}
@@ -608,6 +567,22 @@ export const ScreenView: React.FC = () => {
 
             {/* Quick Action Controls */}
             <div className="flex items-center gap-1.5">
+              {/* Rotate Button in Normal Mode */}
+              <button
+                onClick={() => {
+                  vibrate(10);
+                  setIsRotated90(!isRotated90);
+                }}
+                className={`p-2.5 rounded-xl border transition-all active:scale-95 ${
+                  isRotated90 
+                    ? 'bg-brand-600 text-white border-brand-400 shadow-md shadow-brand-500/20' 
+                    : 'bg-dark-800 hover:bg-dark-700 text-slate-300 border-slate-700'
+                }`}
+                title="Görünümü Döndür"
+              >
+                <RotateCw className="w-4 h-4 text-amber-400" />
+              </button>
+
               {/* Prominent Fullscreen Trigger */}
               <button
                 onClick={toggleFullscreen}
@@ -643,45 +618,24 @@ export const ScreenView: React.FC = () => {
             </div>
           </div>
 
-          {/* Interactive Screen Canvas Card (Aspect Fit, Maximize Display Area) */}
+          {/* Interactive Screen Canvas Card (Clean - Zero overlay buttons covering Windows) */}
           <div 
             ref={wrapperRef}
             className="relative w-full aspect-[16/9] bg-black rounded-2xl overflow-hidden border-2 border-slate-700/80 shadow-2xl flex items-center justify-center touch-none"
           >
             {renderInteractiveCanvas()}
+          </div>
 
-            {/* Floating 'Tam Ekran' and 'Yatay' Badges on Canvas */}
-            <div className="absolute top-2.5 right-2.5 z-10 flex items-center gap-1.5">
-              <button
-                onClick={() => {
-                  vibrate(10);
-                  setIsRotated90(!isRotated90);
-                }}
-                className={`flex items-center gap-1 px-2.5 py-1.5 rounded-xl backdrop-blur-md text-[11px] font-semibold border shadow-lg active:scale-90 transition-all ${
-                  isRotated90 
-                    ? 'bg-brand-600 text-white border-brand-400' 
-                    : 'bg-dark-900/80 text-slate-300 border-slate-700/70 hover:text-white'
-                }`}
-                title="Görünümü Döndür"
-              >
-                <RotateCw className="w-3 h-3 text-amber-400" />
-                <span>{isRotated90 ? 'Dikey' : 'Yatay'}</span>
-              </button>
+          {/* Compact Zoom & Pan Bar (Below canvas, so it never blocks desktop clicks) */}
+          <div className="shrink-0 bg-dark-800/80 rounded-2xl p-2 border border-slate-800 flex items-center justify-between">
+            <span className="text-[11px] font-mono font-bold text-slate-400 pl-2">
+              Zoom: <span className="text-cyan-400">{zoom.toFixed(1)}x</span>
+            </span>
 
-              <button
-                onClick={toggleFullscreen}
-                className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-dark-900/80 backdrop-blur-md text-[11px] font-semibold text-slate-200 border border-slate-700/70 shadow-lg active:scale-90 transition-all hover:text-white"
-              >
-                <Maximize2 className="w-3 h-3 text-cyan-400" />
-                <span>⛶ Tam Ekran</span>
-              </button>
-            </div>
-
-            {/* Floating Zoom & Pan Controls on Canvas */}
-            <div className="absolute bottom-2.5 right-2.5 z-10 flex items-center gap-1 bg-dark-900/80 backdrop-blur-md rounded-2xl p-1 border border-slate-700/60 shadow-lg">
+            <div className="flex items-center gap-1">
               <button
                 onClick={() => handleZoomChange(-0.5)}
-                className="p-1.5 rounded-xl text-slate-300 hover:text-white active:scale-95"
+                className="p-1.5 rounded-lg bg-dark-900 border border-slate-700 text-slate-300 hover:text-white active:scale-95"
                 title="Uzaklaştır"
               >
                 <ZoomOut className="w-3.5 h-3.5" />
@@ -693,15 +647,15 @@ export const ScreenView: React.FC = () => {
                   setZoom(1.0);
                   setPan({ x: 0, y: 0 });
                 }}
-                className="text-[10px] font-mono font-bold text-slate-300 px-1 hover:text-cyan-400"
+                className="px-2 py-1 rounded-lg bg-dark-900 border border-slate-700 text-[10px] font-mono font-bold text-slate-300 hover:text-cyan-400"
                 title="Zoom Sıfırla"
               >
-                {zoom.toFixed(1)}x
+                1.0x
               </button>
 
               <button
                 onClick={() => handleZoomChange(0.5)}
-                className="p-1.5 rounded-xl text-slate-300 hover:text-white active:scale-95"
+                className="p-1.5 rounded-lg bg-dark-900 border border-slate-700 text-slate-300 hover:text-white active:scale-95"
                 title="Yakınlaştır"
               >
                 <ZoomIn className="w-3.5 h-3.5" />
@@ -712,14 +666,14 @@ export const ScreenView: React.FC = () => {
                   vibrate(5);
                   setIsPanMode(!isPanMode);
                 }}
-                className={`p-1.5 rounded-xl text-xs border transition-colors ${
+                className={`p-1.5 rounded-lg text-xs border transition-colors ${
                   isPanMode 
-                    ? 'bg-brand-500 text-white border-brand-400' 
-                    : 'text-slate-400 border-transparent hover:text-white'
+                    ? 'bg-brand-500 text-white border-brand-400 shadow-md shadow-brand-500/20' 
+                    : 'bg-dark-900 text-slate-400 border-slate-700 hover:text-white'
                 }`}
                 title={isPanMode ? 'Pan Modu Aktif (Sürükle)' : 'Dokunmatik Tık Modu'}
               >
-                <Sliders className="w-3 h-3" />
+                <Sliders className="w-3.5 h-3.5" />
               </button>
             </div>
           </div>
