@@ -1,0 +1,296 @@
+using System.Collections.Concurrent;
+using System.Net.WebSockets;
+using System.Text;
+using System.Text.Json;
+using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+using RemoteAgent.Configuration;
+using RemoteAgent.Core;
+using RemoteAgent.Network.Protocol;
+using RemoteAgent.Platform.Input;
+
+namespace RemoteAgent.Network;
+
+public class AgentWebSocketManager
+{
+    private readonly ILogger<AgentWebSocketManager> _logger;
+    private readonly AgentOptions _options;
+    private readonly IInputSimulator _inputSimulator;
+    private readonly ConcurrentDictionary<string, WebSocket> _activeSockets = new();
+    private readonly JsonSerializerOptions _jsonOptions = new()
+    {
+        PropertyNameCaseInsensitive = true
+    };
+
+    public event Action<int>? ActiveConnectionsChanged;
+
+    public AgentWebSocketManager(
+        ILogger<AgentWebSocketManager> logger, 
+        IOptions<AgentOptions> options,
+        IInputSimulator inputSimulator)
+    {
+        _logger = logger;
+        _options = options.Value;
+        _inputSimulator = inputSimulator;
+    }
+
+    public int ActiveConnectionCount => _activeSockets.Count;
+
+    public async Task HandleConnectionAsync(HttpContext context, WebSocket webSocket)
+    {
+        var connectionId = Guid.NewGuid().ToString("N");
+        var clientIp = context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+
+        _activeSockets.TryAdd(connectionId, webSocket);
+        _logger.LogInformation("WebSocket client connected. ID: {ConnectionId}, IP: {ClientIp}", connectionId, clientIp);
+        ActiveConnectionsChanged?.Invoke(_activeSockets.Count);
+
+        try
+        {
+            // 1. Send system.hello immediately
+            var helloPayload = new ServerHelloPayload
+            {
+                ServerName = _options.ServerName,
+                Version = "1.0.0",
+                Os = SystemInfoHelper.GetOsDescription(),
+                Capabilities = SystemInfoHelper.GetCapabilities()
+            };
+            var helloEnvelope = MessageEnvelope<ServerHelloPayload>.Create("event", ActionTypes.SystemHello, helloPayload);
+            await SendJsonAsync(webSocket, helloEnvelope, CancellationToken.None);
+
+            // 2. Read loop
+            var buffer = new byte[1024 * 16]; // 16 KB buffer
+            while (webSocket.State == WebSocketState.Open)
+            {
+                using var ms = new MemoryStream();
+                WebSocketReceiveResult result;
+                do
+                {
+                    result = await webSocket.ReceiveAsync(new ArraySegment<byte>(buffer), CancellationToken.None);
+                    if (result.MessageType == WebSocketMessageType.Close)
+                    {
+                        break;
+                    }
+                    ms.Write(buffer, 0, result.Count);
+                }
+                while (!result.EndOfMessage);
+
+                if (result.MessageType == WebSocketMessageType.Close)
+                {
+                    _logger.LogInformation("Client requested close. ID: {ConnectionId}", connectionId);
+                    await webSocket.CloseAsync(WebSocketCloseStatus.NormalClosure, "Closing", CancellationToken.None);
+                    break;
+                }
+
+                if (result.MessageType == WebSocketMessageType.Text)
+                {
+                    ms.Seek(0, SeekOrigin.Begin);
+                    using var reader = new StreamReader(ms, Encoding.UTF8);
+                    var messageJson = await reader.ReadToEndAsync();
+                    await ProcessMessageAsync(webSocket, messageJson);
+                }
+            }
+        }
+        catch (WebSocketException ex)
+        {
+            _logger.LogWarning("WebSocket disconnected: {Message} (ID: {ConnectionId})", ex.Message, connectionId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error handling WebSocket client. ID: {ConnectionId}", connectionId);
+        }
+        finally
+        {
+            _activeSockets.TryRemove(connectionId, out _);
+            _inputSimulator.ReleaseAllKeys();
+            _logger.LogInformation("WebSocket client removed. ID: {ConnectionId}. Remaining: {Count}", connectionId, _activeSockets.Count);
+            ActiveConnectionsChanged?.Invoke(_activeSockets.Count);
+
+            if (webSocket.State == WebSocketState.Open || webSocket.State == WebSocketState.CloseReceived)
+            {
+                try
+                {
+                    await webSocket.CloseAsync(WebSocketCloseStatus.NormalClosure, "Session ended", CancellationToken.None);
+                }
+                catch
+                {
+                    // Ignore during cleanup
+                }
+            }
+            webSocket.Dispose();
+        }
+    }
+
+    private async Task ProcessMessageAsync(WebSocket webSocket, string rawJson)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(rawJson);
+            var root = doc.RootElement;
+
+            if (!root.TryGetProperty("action", out var actionProp))
+            {
+                _logger.LogWarning("Received message without 'action' property: {Json}", rawJson);
+                return;
+            }
+
+            var action = actionProp.GetString();
+            switch (action)
+            {
+                case ActionTypes.SystemPing:
+                    long clientTime = 0;
+                    if (root.TryGetProperty("payload", out var payloadProp) &&
+                        payloadProp.TryGetProperty("clientTime", out var clientTimeProp))
+                    {
+                        clientTime = clientTimeProp.GetInt64();
+                    }
+
+                    var pong = new PongPayload
+                    {
+                        ClientTime = clientTime,
+                        ServerTime = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+                    };
+                    var pongEnvelope = MessageEnvelope<PongPayload>.Create("heartbeat", ActionTypes.SystemPong, pong);
+                    await SendJsonAsync(webSocket, pongEnvelope, CancellationToken.None);
+                    break;
+
+                case ActionTypes.MouseMove:
+                    if (root.TryGetProperty("payload", out var movePayload))
+                    {
+                        int dx = movePayload.TryGetProperty("dx", out var dxProp) ? dxProp.GetInt32() : 0;
+                        int dy = movePayload.TryGetProperty("dy", out var dyProp) ? dyProp.GetInt32() : 0;
+                        _inputSimulator.MoveMouseRelative(dx, dy);
+                    }
+                    break;
+
+                case ActionTypes.MouseClick:
+                    if (root.TryGetProperty("payload", out var clickPayload))
+                    {
+                        var btn = clickPayload.TryGetProperty("button", out var btnProp) ? btnProp.GetString() ?? "left" : "left";
+                        bool isDouble = clickPayload.TryGetProperty("double", out var doubleProp) && doubleProp.GetBoolean();
+                        _inputSimulator.MouseClick(btn, isDouble);
+                    }
+                    break;
+
+                case "mouse.down":
+                    if (root.TryGetProperty("payload", out var downPayload))
+                    {
+                        var btn = downPayload.TryGetProperty("button", out var btnProp) ? btnProp.GetString() ?? "left" : "left";
+                        _inputSimulator.MouseDown(btn);
+                    }
+                    break;
+
+                case "mouse.up":
+                    if (root.TryGetProperty("payload", out var upPayload))
+                    {
+                        var btn = upPayload.TryGetProperty("button", out var btnProp) ? btnProp.GetString() ?? "left" : "left";
+                        _inputSimulator.MouseUp(btn);
+                    }
+                    break;
+
+                case "mouse.scroll":
+                    if (root.TryGetProperty("payload", out var scrollPayload))
+                    {
+                        int dx = scrollPayload.TryGetProperty("dx", out var dxProp) ? dxProp.GetInt32() : 0;
+                        int dy = scrollPayload.TryGetProperty("dy", out var dyProp) ? dyProp.GetInt32() : 0;
+                        _inputSimulator.MouseScroll(dx, dy);
+                    }
+                    break;
+
+                case ActionTypes.KeyboardText:
+                    if (root.TryGetProperty("payload", out var textPayload) &&
+                        textPayload.TryGetProperty("text", out var textProp))
+                    {
+                        var text = textProp.GetString();
+                        if (!string.IsNullOrEmpty(text))
+                        {
+                            _inputSimulator.SendText(text);
+                        }
+                    }
+                    break;
+
+                case ActionTypes.KeyboardKeyDown:
+                    if (root.TryGetProperty("payload", out var keyDownPayload) &&
+                        keyDownPayload.TryGetProperty("key", out var downKeyProp))
+                    {
+                        var key = downKeyProp.GetString();
+                        if (!string.IsNullOrEmpty(key))
+                        {
+                            _inputSimulator.KeyDown(key);
+                        }
+                    }
+                    break;
+
+                case ActionTypes.KeyboardKeyUp:
+                    if (root.TryGetProperty("payload", out var keyUpPayload) &&
+                        keyUpPayload.TryGetProperty("key", out var upKeyProp))
+                    {
+                        var key = upKeyProp.GetString();
+                        if (!string.IsNullOrEmpty(key))
+                        {
+                            _inputSimulator.KeyUp(key);
+                        }
+                    }
+                    break;
+
+                case ActionTypes.KeyboardShortcut:
+                    if (root.TryGetProperty("payload", out var shortcutPayload) &&
+                        shortcutPayload.TryGetProperty("keys", out var keysArrayProp) &&
+                        keysArrayProp.ValueKind == JsonValueKind.Array)
+                    {
+                        var keys = new List<string>();
+                        foreach (var k in keysArrayProp.EnumerateArray())
+                        {
+                            var s = k.GetString();
+                            if (!string.IsNullOrEmpty(s)) keys.Add(s);
+                        }
+                        if (keys.Count > 0)
+                        {
+                            _inputSimulator.ExecuteShortcut(keys.ToArray());
+                        }
+                    }
+                    break;
+
+                case ActionTypes.KeyboardReleaseAll:
+                    _inputSimulator.ReleaseAllKeys();
+                    break;
+
+                default:
+                    _logger.LogInformation("Unhandled protocol action received: {Action}", action);
+                    break;
+            }
+        }
+        catch (JsonException ex)
+        {
+            _logger.LogWarning(ex, "Failed to parse incoming WebSocket JSON message: {Raw}", rawJson);
+            var err = new ErrorPayload
+            {
+                Code = "BAD_REQUEST",
+                Message = "Malformed JSON message"
+            };
+            var errEnvelope = MessageEnvelope<ErrorPayload>.Create("response", ActionTypes.SystemError, err);
+            await SendJsonAsync(webSocket, errEnvelope, CancellationToken.None);
+        }
+    }
+
+    public async Task SendJsonAsync<T>(WebSocket socket, MessageEnvelope<T> envelope, CancellationToken cancellationToken)
+    {
+        if (socket.State != WebSocketState.Open)
+        {
+            return;
+        }
+
+        var json = JsonSerializer.Serialize(envelope, _jsonOptions);
+        var bytes = Encoding.UTF8.GetBytes(json);
+        await socket.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, cancellationToken);
+    }
+
+    public async Task BroadcastAsync<T>(MessageEnvelope<T> envelope, CancellationToken cancellationToken = default)
+    {
+        var tasks = _activeSockets.Values
+            .Where(s => s.State == WebSocketState.Open)
+            .Select(s => SendJsonAsync(s, envelope, cancellationToken));
+        await Task.WhenAll(tasks);
+    }
+}
