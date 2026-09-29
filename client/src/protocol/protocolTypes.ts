@@ -96,4 +96,33 @@ export interface MediaNowPlayingPayload {
   sourceApp?: string;
 }
 
+// Power & System Controls (Phase 6)
+export type PowerActionType = 
+  | 'lock' 
+  | 'sleep' 
+  | 'displayOff' 
+  | 'taskManager' 
+  | 'showDesktop' 
+  | 'taskView' 
+  | 'screenshot'
+  | 'shutdown' 
+  | 'restart';
+
+export interface PowerActionPayload {
+  action: PowerActionType;
+}
+
+export interface PowerSchedulePayload {
+  action: 'shutdown' | 'restart';
+  timeoutSeconds: number;
+}
+
+export interface PowerStatusPayload {
+  isActive: boolean;
+  action: 'shutdown' | 'restart' | 'none';
+  totalSeconds: number;
+  remainingSeconds: number;
+  targetTimeUtc?: string;
+}
+
 export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'reconnecting';

@@ -6,9 +6,9 @@ import { NavigationBar, TabType } from './features/navigation/NavigationBar';
 import { FeaturePlaceholder } from './features/placeholders/FeaturePlaceholder';
 import { TouchpadView } from './features/touchpad/TouchpadView';
 import { MediaControlView } from './features/media/MediaControlView';
+import { PowerSystemView } from './features/power/PowerSystemView';
 import { 
   Folder, 
-  Settings, 
   Smartphone,
   CheckCircle
 } from 'lucide-react';
@@ -96,12 +96,7 @@ export const App: React.FC = () => {
         )}
 
         {activeTab === 'more' && (
-          <FeaturePlaceholder
-            title="Power, Macros & Screen Stream"
-            phase="Phase 6, 8 & 11"
-            description="Sleep, Lock, Shutdown with safety confirmations, custom shortcut macros, and real-time screen streaming."
-            icon={Settings}
-          />
+          <PowerSystemView />
         )}
       </main>
 

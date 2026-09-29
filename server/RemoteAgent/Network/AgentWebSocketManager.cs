@@ -21,6 +21,7 @@ public class AgentWebSocketManager
     private readonly IInputSimulator _inputSimulator;
     private readonly IAudioManager _audioManager;
     private readonly IMediaManager _mediaManager;
+    private readonly Platform.SystemControl.ISystemControlManager _systemControlManager;
     private readonly ConcurrentDictionary<string, WebSocket> _activeSockets = new();
     private readonly JsonSerializerOptions _jsonOptions = new()
     {
@@ -34,13 +35,15 @@ public class AgentWebSocketManager
         IOptions<AgentOptions> options,
         IInputSimulator inputSimulator,
         IAudioManager audioManager,
-        IMediaManager mediaManager)
+        IMediaManager mediaManager,
+        Platform.SystemControl.ISystemControlManager systemControlManager)
     {
         _logger = logger;
         _options = options.Value;
         _inputSimulator = inputSimulator;
         _audioManager = audioManager;
         _mediaManager = mediaManager;
+        _systemControlManager = systemControlManager;
 
         // Broadcast real-time volume state changes to all connected iPhones
         _audioManager.VolumeChanged += state =>
@@ -53,6 +56,13 @@ public class AgentWebSocketManager
         _mediaManager.NowPlayingChanged += meta =>
         {
             var envelope = MessageEnvelope<MediaNowPlayingPayload>.Create("event", ActionTypes.MediaNowPlaying, meta);
+            _ = BroadcastAsync(envelope);
+        };
+
+        // Broadcast real-time power/shutdown timer changes to all connected iPhones
+        _systemControlManager.ShutdownStatusChanged += status =>
+        {
+            var envelope = MessageEnvelope<PowerStatusPayload>.Create("event", ActionTypes.PowerStatus, status);
             _ = BroadcastAsync(envelope);
         };
     }
@@ -87,6 +97,9 @@ public class AgentWebSocketManager
 
             var initialMedia = await _mediaManager.GetNowPlayingAsync();
             await SendJsonAsync(webSocket, MessageEnvelope<MediaNowPlayingPayload>.Create("event", ActionTypes.MediaNowPlaying, initialMedia), CancellationToken.None);
+
+            var initialPower = _systemControlManager.GetCurrentPowerStatus();
+            await SendJsonAsync(webSocket, MessageEnvelope<PowerStatusPayload>.Create("event", ActionTypes.PowerStatus, initialPower), CancellationToken.None);
 
             // 2. Read loop
             var buffer = new byte[1024 * 16]; // 16 KB buffer
@@ -372,6 +385,75 @@ public class AgentWebSocketManager
                             await _mediaManager.ExecuteMediaActionAsync(act);
                         }
                     }
+                    break;
+
+                // Power & System Controls (Phase 6)
+                case ActionTypes.PowerRequestStatus:
+                    var powerStatus = _systemControlManager.GetCurrentPowerStatus();
+                    await SendJsonAsync(webSocket, MessageEnvelope<PowerStatusPayload>.Create("event", ActionTypes.PowerStatus, powerStatus), CancellationToken.None);
+                    break;
+
+                case ActionTypes.PowerAction:
+                    if (root.TryGetProperty("payload", out var powerPayload) &&
+                        powerPayload.TryGetProperty("action", out var pActionProp))
+                    {
+                        var act = pActionProp.GetString();
+                        switch (act?.ToLowerInvariant())
+                        {
+                            case "lock":
+                                _systemControlManager.LockWorkstation();
+                                break;
+                            case "sleep":
+                                _systemControlManager.Sleep();
+                                break;
+                            case "displayoff":
+                                _systemControlManager.TurnOffDisplay();
+                                break;
+                            case "taskmanager":
+                                _systemControlManager.OpenTaskManager();
+                                break;
+                            case "showdesktop":
+                                _systemControlManager.ToggleDesktop();
+                                break;
+                            case "taskview":
+                                _systemControlManager.OpenTaskView();
+                                break;
+                            case "screenshot":
+                                _systemControlManager.TakeScreenshot();
+                                break;
+                            case "shutdown":
+                                _systemControlManager.ShutdownNow();
+                                break;
+                            case "restart":
+                                _systemControlManager.RestartNow();
+                                break;
+                            default:
+                                _logger.LogWarning("Unknown power action requested: {Action}", act);
+                                break;
+                        }
+                    }
+                    break;
+
+                case ActionTypes.PowerSchedule:
+                    if (root.TryGetProperty("payload", out var schedulePayload))
+                    {
+                        var schedAction = schedulePayload.TryGetProperty("action", out var schedActProp) ? schedActProp.GetString() ?? "shutdown" : "shutdown";
+                        var timeoutSeconds = schedulePayload.TryGetProperty("timeoutSeconds", out var secProp) ? secProp.GetInt32() : 1800;
+                        if (timeoutSeconds <= 0) timeoutSeconds = 60;
+
+                        if (schedAction.Equals("restart", StringComparison.OrdinalIgnoreCase))
+                        {
+                            _systemControlManager.ScheduleRestart(timeoutSeconds);
+                        }
+                        else
+                        {
+                            _systemControlManager.ScheduleShutdown(timeoutSeconds);
+                        }
+                    }
+                    break;
+
+                case ActionTypes.PowerCancel:
+                    _systemControlManager.CancelScheduledShutdown();
                     break;
 
                 default:

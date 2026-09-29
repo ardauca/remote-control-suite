@@ -1,6 +1,7 @@
-import { MessageEnvelope, ServerHelloPayload, PongPayload, VolumeStatePayload, MediaNowPlayingPayload } from './protocolTypes';
+import { MessageEnvelope, ServerHelloPayload, PongPayload, VolumeStatePayload, MediaNowPlayingPayload, PowerStatusPayload } from './protocolTypes';
 import { useConnectionStore } from '../stores/connectionStore';
 import { useMediaStore } from '../stores/mediaStore';
+import { usePowerStore } from '../stores/powerStore';
 
 type MessageHandler = (envelope: MessageEnvelope) => void;
 
@@ -134,6 +135,9 @@ class WebSocketClient {
       } else if (envelope.action === 'media.nowPlaying') {
         const media = envelope.payload as MediaNowPlayingPayload;
         useMediaStore.getState().setNowPlaying(media);
+      } else if (envelope.action === 'power.status') {
+        const power = envelope.payload as PowerStatusPayload;
+        usePowerStore.getState().setPowerStatus(power);
       }
 
       // Notify registered custom action listeners

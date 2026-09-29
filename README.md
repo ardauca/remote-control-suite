@@ -124,6 +124,9 @@ node scripts/verify-keyboard.js
 
 # Verify Windows WASAPI master volume, application mixer, and GSMTC media control
 node scripts/verify-media-volume.js
+
+# Verify Windows power management, timed shutdown scheduler, and system controls
+node scripts/verify-power.js
 ```
 
 ---
@@ -135,7 +138,7 @@ node scripts/verify-media-volume.js
 - [x] **Phase 3:** High-precision relative mouse control, multi-touch gestures, drag lock, and haptics.
 - [x] **Phase 4:** Virtual keyboard, Unicode text input, modifier engine, quick shortcuts, custom macros.
 - [x] **Phase 5:** Windows Media Control & Volume Mixer (WASAPI & GSMTC session integration).
-- [ ] **Phase 6:** Windows System Controls (Power/Sleep/Lock, Task Manager, Window Switcher).
+- [x] **Phase 6:** Windows System Controls & Timed Shutdown (Power/Sleep/Lock, Task Manager, Timed Shutdown Scheduler).
 - [ ] **Phase 7:** Display Streamer & Ultra-Low Latency Screen Mirroring.
 
 ---

@@ -31,6 +31,10 @@ public static class ActionTypes
     public const string MediaRequestNowPlaying = "media.requestNowPlaying";
     public const string MediaNowPlaying = "media.nowPlaying";
 
-    // Power (Phase 6+)
+    // Power & System Controls (Phase 6)
     public const string PowerAction = "power.action";
+    public const string PowerSchedule = "power.schedule";
+    public const string PowerCancel = "power.cancel";
+    public const string PowerRequestStatus = "power.requestStatus";
+    public const string PowerStatus = "power.status";
 }

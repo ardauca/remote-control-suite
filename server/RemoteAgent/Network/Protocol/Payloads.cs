@@ -164,3 +164,38 @@ public class MediaNowPlayingPayload
     public string? SourceApp { get; set; }
 }
 
+// Power & System Controls (Phase 6)
+public class PowerActionPayload
+{
+    [JsonPropertyName("action")]
+    public string Action { get; set; } = string.Empty; // lock, sleep, displayOff, taskManager, showDesktop, taskView, screenshot, shutdown, restart
+}
+
+public class PowerSchedulePayload
+{
+    [JsonPropertyName("action")]
+    public string Action { get; set; } = "shutdown"; // shutdown, restart
+
+    [JsonPropertyName("timeoutSeconds")]
+    public int TimeoutSeconds { get; set; } // e.g. 1800 (30 min)
+}
+
+public class PowerStatusPayload
+{
+    [JsonPropertyName("isActive")]
+    public bool IsActive { get; set; }
+
+    [JsonPropertyName("action")]
+    public string Action { get; set; } = "none"; // shutdown, restart, none
+
+    [JsonPropertyName("totalSeconds")]
+    public int TotalSeconds { get; set; }
+
+    [JsonPropertyName("remainingSeconds")]
+    public int RemainingSeconds { get; set; }
+
+    [JsonPropertyName("targetTimeUtc")]
+    public DateTime? TargetTimeUtc { get; set; }
+}
+
+

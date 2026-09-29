@@ -55,6 +55,7 @@ public static class Program
         builder.Services.AddSingleton<IInputSimulator, WindowsInputSimulator>();
         builder.Services.AddSingleton<Platform.Audio.IAudioManager, Platform.Audio.WindowsAudioManager>();
         builder.Services.AddSingleton<Platform.Media.IMediaManager, Platform.Media.WindowsMediaManager>();
+        builder.Services.AddSingleton<Platform.SystemControl.ISystemControlManager, Platform.SystemControl.WindowsSystemControlManager>();
         builder.Services.AddSingleton<AgentWebSocketManager>();
         builder.Services.AddCors(options =>
         {

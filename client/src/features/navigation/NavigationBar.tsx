@@ -1,5 +1,5 @@
 import React from 'react';
-import { Home, MousePointer, PlaySquare, Folder, Settings } from 'lucide-react';
+import { Home, MousePointer, PlaySquare, Folder, Power } from 'lucide-react';
 
 export type TabType = 'home' | 'remote' | 'media' | 'files' | 'more';
 
@@ -14,7 +14,7 @@ export const NavigationBar: React.FC<NavigationBarProps> = ({ activeTab, onTabCh
     { id: 'remote' as TabType, label: 'Remote', icon: MousePointer },
     { id: 'media' as TabType, label: 'Media', icon: PlaySquare },
     { id: 'files' as TabType, label: 'Files', icon: Folder },
-    { id: 'more' as TabType, label: 'More', icon: Settings },
+    { id: 'more' as TabType, label: 'Power', icon: Power },
   ];
 
   return (
