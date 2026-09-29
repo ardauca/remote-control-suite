@@ -61,7 +61,7 @@ export const MediaControlView: React.FC = () => {
   };
 
   return (
-    <div className="flex flex-col w-full h-full overflow-y-auto space-y-4 p-4 pb-24 select-none animate-fadeIn">
+    <div className="w-full space-y-4 select-none animate-fadeIn">
       {/* 1. Header with Refresh */}
       <div className="flex items-center justify-between">
         <div>
@@ -86,7 +86,7 @@ export const MediaControlView: React.FC = () => {
       </div>
 
       {/* 2. Now Playing Glassmorphic Card */}
-      <div className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-slate-900/90 via-slate-800/80 to-dark-900/90 border border-slate-700/60 p-5 shadow-2xl backdrop-blur-xl">
+      <div className="relative shrink-0 overflow-hidden rounded-3xl bg-gradient-to-br from-slate-900/90 via-slate-800/80 to-dark-900/90 border border-slate-700/60 p-5 shadow-2xl backdrop-blur-xl">
         <div className="flex items-center gap-4">
           {/* Album Art / Icon */}
           <div className="w-16 h-16 rounded-2xl bg-gradient-to-tr from-brand-600 to-indigo-600 flex items-center justify-center shadow-lg shadow-brand-500/20 flex-shrink-0">
@@ -177,7 +177,7 @@ export const MediaControlView: React.FC = () => {
       </div>
 
       {/* 3. Master Volume Card */}
-      <div className="bg-dark-800/80 rounded-3xl p-5 border border-slate-700/60 shadow-xl space-y-4">
+      <div className="shrink-0 bg-dark-800/80 rounded-3xl p-5 border border-slate-700/60 shadow-xl space-y-4">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2.5">
             <button
@@ -229,7 +229,7 @@ export const MediaControlView: React.FC = () => {
       </div>
 
       {/* 4. Windows Volume Mixer (App Sessions) */}
-      <div className="bg-dark-800/80 rounded-3xl p-5 border border-slate-700/60 shadow-xl space-y-3.5">
+      <div className="shrink-0 bg-dark-800/80 rounded-3xl p-5 border border-slate-700/60 shadow-xl space-y-3.5">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2 text-xs font-bold text-slate-300 uppercase tracking-wider">
             <Sliders className="w-4 h-4 text-emerald-400" />
