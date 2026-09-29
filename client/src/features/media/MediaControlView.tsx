@@ -65,10 +65,15 @@ export const MediaControlView: React.FC = () => {
       {/* 1. Header with Refresh */}
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-lg font-bold text-white flex items-center gap-2">
-            <Music className="w-5 h-5 text-brand-400" />
-            Media & Sound Mixer
-          </h2>
+          <div className="flex items-center gap-2">
+            <h2 className="text-lg font-bold text-white flex items-center gap-2">
+              <Music className="w-5 h-5 text-brand-400" />
+              Media & Sound Mixer
+            </h2>
+            <span className="px-1.5 py-0.5 text-[10px] font-bold bg-brand-500/20 text-brand-400 rounded-md border border-brand-500/30">
+              v2.0
+            </span>
+          </div>
           <p className="text-xs text-slate-400">Control Windows master sound, app volumes, and media</p>
         </div>
         <button
@@ -103,41 +108,70 @@ export const MediaControlView: React.FC = () => {
         </div>
 
         {/* Playback Controls */}
-        <div className="flex items-center justify-center gap-4 mt-5">
+        <div className="flex items-center justify-around gap-2 mt-5 pt-3 border-t border-slate-700/40">
+          {/* Previous Track Button */}
           <button
-            onClick={() => executeMediaAction('previous')}
-            className="p-3 rounded-2xl bg-slate-800/80 hover:bg-slate-700 text-slate-200 active:scale-90 transition-all border border-slate-700"
-            title="Previous Track"
+            onClick={() => {
+              if ('vibrate' in navigator) navigator.vibrate(10);
+              executeMediaAction('previous');
+            }}
+            className="flex-1 max-w-[84px] h-16 rounded-2xl bg-slate-800 hover:bg-slate-700 active:bg-slate-600 active:scale-95 text-slate-100 flex flex-col items-center justify-center gap-1 border-2 border-slate-600/80 shadow-md transition-all select-none"
+            title="Previous Track (|<<)"
+            aria-label="Previous Track"
           >
-            <SkipBack className="w-5 h-5" />
+            <SkipBack className="w-6 h-6 text-brand-300" />
+            <span className="text-[11px] font-bold tracking-wide">|&lt;&lt; Prev</span>
           </button>
 
+          {/* Play / Pause Main Hero Button */}
           <button
-            onClick={() => executeMediaAction('playPause')}
-            className="p-4 rounded-2xl bg-gradient-to-r from-brand-500 to-indigo-500 hover:from-brand-600 hover:to-indigo-600 text-white shadow-xl shadow-brand-500/25 active:scale-95 transition-all"
-            title="Play / Pause"
+            onClick={() => {
+              if ('vibrate' in navigator) navigator.vibrate(15);
+              executeMediaAction('playPause');
+            }}
+            className="flex-1 max-w-[110px] h-16 rounded-2xl bg-gradient-to-r from-brand-500 via-indigo-500 to-brand-600 hover:brightness-110 active:scale-95 text-white flex flex-col items-center justify-center gap-1 border-2 border-brand-300/40 shadow-xl shadow-brand-500/30 transition-all select-none"
+            title={nowPlaying?.isPlaying ? 'Pause' : 'Play'}
+            aria-label={nowPlaying?.isPlaying ? 'Pause' : 'Play'}
           >
             {nowPlaying?.isPlaying ? (
-              <Pause className="w-6 h-6 fill-current" />
+              <>
+                <Pause className="w-7 h-7 fill-current" />
+                <span className="text-[11px] font-extrabold uppercase tracking-wider">Pause</span>
+              </>
             ) : (
-              <Play className="w-6 h-6 fill-current ml-0.5" />
+              <>
+                <Play className="w-7 h-7 fill-current ml-0.5" />
+                <span className="text-[11px] font-extrabold uppercase tracking-wider">Play</span>
+              </>
             )}
           </button>
 
+          {/* Next Track Button */}
           <button
-            onClick={() => executeMediaAction('next')}
-            className="p-3 rounded-2xl bg-slate-800/80 hover:bg-slate-700 text-slate-200 active:scale-90 transition-all border border-slate-700"
-            title="Next Track"
+            onClick={() => {
+              if ('vibrate' in navigator) navigator.vibrate(10);
+              executeMediaAction('next');
+            }}
+            className="flex-1 max-w-[84px] h-16 rounded-2xl bg-slate-800 hover:bg-slate-700 active:bg-slate-600 active:scale-95 text-slate-100 flex flex-col items-center justify-center gap-1 border-2 border-slate-600/80 shadow-md transition-all select-none"
+            title="Next Track (>>|)"
+            aria-label="Next Track"
           >
-            <SkipForward className="w-5 h-5" />
+            <SkipForward className="w-6 h-6 text-brand-300" />
+            <span className="text-[11px] font-bold tracking-wide">Next &gt;&gt;|</span>
           </button>
 
+          {/* Stop Button */}
           <button
-            onClick={() => executeMediaAction('stop')}
-            className="p-3 rounded-2xl bg-slate-800/80 hover:bg-slate-700 text-slate-400 hover:text-rose-400 active:scale-90 transition-all border border-slate-700"
+            onClick={() => {
+              if ('vibrate' in navigator) navigator.vibrate(10);
+              executeMediaAction('stop');
+            }}
+            className="w-14 h-16 rounded-2xl bg-slate-900/90 hover:bg-slate-800 active:bg-rose-950/40 active:scale-95 text-slate-400 hover:text-rose-400 flex flex-col items-center justify-center gap-1 border border-slate-700/80 transition-all select-none"
             title="Stop"
+            aria-label="Stop"
           >
-            <Square className="w-4 h-4" />
+            <Square className="w-5 h-5" />
+            <span className="text-[10px] font-medium">Stop</span>
           </button>
         </div>
       </div>

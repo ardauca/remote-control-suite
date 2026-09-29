@@ -107,9 +107,10 @@ public class WindowsAudioManager : IAudioManager
                                 appName = $"App ({pid})";
                             }
 
+                            var sessId = session.GetSessionIdentifier;
                             var item = new AudioSessionItem
                             {
-                                Id = session.GetSessionIdentifier ?? pid.ToString(),
+                                Id = !string.IsNullOrWhiteSpace(sessId) ? sessId : $"pid:{pid}",
                                 Name = appName,
                                 ProcessId = pid,
                                 Volume = MathF.Round(session.SimpleAudioVolume.Volume * 100f, 1),
@@ -167,6 +168,47 @@ public class WindowsAudioManager : IAudioManager
         }
     }
 
+    private static bool MatchesSession(NAudio.CoreAudioApi.AudioSessionControl session, string targetId)
+    {
+        if (string.IsNullOrWhiteSpace(targetId)) return false;
+
+        // 1. Check SessionIdentifier
+        try
+        {
+            var sessId = session.GetSessionIdentifier;
+            if (!string.IsNullOrEmpty(sessId) && string.Equals(sessId, targetId, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+        catch { }
+
+        // 2. Check SessionInstanceIdentifier
+        try
+        {
+            var instId = session.GetSessionInstanceIdentifier;
+            if (!string.IsNullOrEmpty(instId) && string.Equals(instId, targetId, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+        catch { }
+
+        // 3. Process ID checks ("1234", "pid:1234")
+        try
+        {
+            var pid = session.GetProcessID.ToString();
+            if (string.Equals(pid, targetId, StringComparison.OrdinalIgnoreCase))
+                return true;
+
+            if (string.Equals($"pid:{pid}", targetId, StringComparison.OrdinalIgnoreCase))
+                return true;
+
+            if (targetId.StartsWith("pid:", StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(targetId[4..], pid, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+        catch { }
+
+        return false;
+    }
+
     public void SetSessionVolume(string sessionId, float volume)
     {
         lock (_lock)
@@ -177,15 +219,21 @@ public class WindowsAudioManager : IAudioManager
                 var clamped = Math.Clamp(volume / 100f, 0.0f, 1.0f);
 
                 var sessions = _defaultPlaybackDevice.AudioSessionManager.Sessions;
+                bool found = false;
                 for (int i = 0; i < sessions.Count; i++)
                 {
                     var s = sessions[i];
-                    var id = s.GetSessionIdentifier ?? s.GetProcessID.ToString();
-                    if (id == sessionId || s.GetProcessID.ToString() == sessionId)
+                    if (MatchesSession(s, sessionId))
                     {
                         s.SimpleAudioVolume.Volume = clamped;
+                        found = true;
                         break;
                     }
+                }
+
+                if (found)
+                {
+                    VolumeChanged?.Invoke(GetVolumeState());
                 }
             }
             catch (Exception ex)
@@ -204,15 +252,21 @@ public class WindowsAudioManager : IAudioManager
                 if (_defaultPlaybackDevice?.AudioSessionManager == null) return;
 
                 var sessions = _defaultPlaybackDevice.AudioSessionManager.Sessions;
+                bool found = false;
                 for (int i = 0; i < sessions.Count; i++)
                 {
                     var s = sessions[i];
-                    var id = s.GetSessionIdentifier ?? s.GetProcessID.ToString();
-                    if (id == sessionId || s.GetProcessID.ToString() == sessionId)
+                    if (MatchesSession(s, sessionId))
                     {
                         s.SimpleAudioVolume.Mute = isMuted;
+                        found = true;
                         break;
                     }
+                }
+
+                if (found)
+                {
+                    VolumeChanged?.Invoke(GetVolumeState());
                 }
             }
             catch (Exception ex)

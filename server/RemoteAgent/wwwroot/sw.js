@@ -1,4 +1,4 @@
-const CACHE_NAME = 'remote-suite-v1';
+const CACHE_NAME = 'remote-suite-v2';
 const ASSETS_TO_CACHE = [
   '/',
   '/index.html',
@@ -20,6 +20,7 @@ self.addEventListener('activate', (event) => {
       return Promise.all(
         cacheNames.map((cache) => {
           if (cache !== CACHE_NAME) {
+            console.log('[SW] Deleting obsolete cache:', cache);
             return caches.delete(cache);
           }
         })
@@ -29,15 +30,32 @@ self.addEventListener('activate', (event) => {
   self.clients.claim();
 });
 
+// Network-First with Cache Fallback strategy
 self.addEventListener('fetch', (event) => {
   // Never intercept WebSocket or API calls
   if (event.request.url.includes('/ws') || event.request.url.includes('/api/')) {
     return;
   }
 
+  // Only handle GET requests
+  if (event.request.method !== 'GET') {
+    return;
+  }
+
   event.respondWith(
-    caches.match(event.request).then((response) => {
-      return response || fetch(event.request);
-    })
+    fetch(event.request)
+      .then((networkResponse) => {
+        if (networkResponse && networkResponse.status === 200) {
+          const responseToCache = networkResponse.clone();
+          caches.open(CACHE_NAME).then((cache) => {
+            cache.put(event.request, responseToCache);
+          });
+        }
+        return networkResponse;
+      })
+      .catch(() => {
+        // Network failed (offline), fallback to cached asset
+        return caches.match(event.request);
+      })
   );
 });

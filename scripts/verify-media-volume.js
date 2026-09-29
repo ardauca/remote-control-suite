@@ -106,8 +106,31 @@ async function runTest() {
   await waitForAction(ws, 'volume.state');
   console.log(`✔ Restored master volume to ${originalVolume}%`);
 
-  // 4. Test Media Now Playing & GSMTC
-  console.log('\n[3/4] Testing Media Now Playing (GSMTC WinRT)...');
+  // 4. Test Per-Application Session Volume Control (if sessions exist)
+  if (volState.payload.sessions.length > 0) {
+    console.log('\n[3/5] Testing Per-Application Session Volume & PID matching...');
+    const targetSession = volState.payload.sessions[0];
+    const origSessionVol = targetSession.volume;
+    const testSessionVol = 60;
+
+    console.log(`Setting volume for app "${targetSession.name}" (ID: ${targetSession.id}, PID: ${targetSession.processId}) to ${testSessionVol}%...`);
+    // Test using exact targetSession.id
+    sendMsg(ws, 'volume.setSession', { sessionId: targetSession.id, volume: testSessionVol });
+    const sessionUpdatedVol = await waitForAction(ws, 'volume.state');
+    const matchedSession = sessionUpdatedVol.payload.sessions.find(s => s.processId === targetSession.processId);
+    console.log(`✔ Received session volume update: ${matchedSession ? matchedSession.volume : 'N/A'}%`);
+
+    // Test PID fallback matching syntax "pid:<PID>"
+    console.log(`Testing PID fallback matching ("pid:${targetSession.processId}")...`);
+    sendMsg(ws, 'volume.setSession', { sessionId: `pid:${targetSession.processId}`, volume: origSessionVol });
+    await waitForAction(ws, 'volume.state');
+    console.log(`✔ Restored app "${targetSession.name}" session volume to ${origSessionVol}% via PID matching.`);
+  } else {
+    console.log('\n[3/5] No active per-app audio sessions found to test per-app mixer (skipped, normal if no app playing sound).');
+  }
+
+  // 5. Test Media Now Playing & GSMTC
+  console.log('\n[4/5] Testing Media Now Playing (GSMTC WinRT)...');
   sendMsg(ws, 'media.requestNowPlaying');
   const mediaState = await waitForAction(ws, 'media.nowPlaying');
   console.log('✔ Received Media Now Playing Metadata:');
@@ -116,10 +139,22 @@ async function runTest() {
   console.log(`   • Playing: ${mediaState.payload.isPlaying}`);
   console.log(`   • Source App: ${mediaState.payload.sourceApp || '(None)'}`);
 
-  // 5. Test Media Action (Play/Pause, Next, Previous)
-  console.log('\n[4/4] Testing Media Actions...');
+  // 6. Test Media Actions (playPause, next, previous, stop)
+  console.log('\n[5/5] Testing Media Actions (playPause, next, previous, stop)...');
   sendMsg(ws, 'media.action', { action: 'playPause' });
   console.log('✔ Sent media.action (playPause)');
+  await new Promise(r => setTimeout(r, 200));
+
+  sendMsg(ws, 'media.action', { action: 'next' });
+  console.log('✔ Sent media.action (next / >>|)');
+  await new Promise(r => setTimeout(r, 200));
+
+  sendMsg(ws, 'media.action', { action: 'previous' });
+  console.log('✔ Sent media.action (previous / |<<)');
+  await new Promise(r => setTimeout(r, 200));
+
+  sendMsg(ws, 'media.action', { action: 'stop' });
+  console.log('✔ Sent media.action (stop)');
 
   ws.close();
 
