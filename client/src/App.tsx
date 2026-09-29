@@ -55,7 +55,13 @@ export const App: React.FC = () => {
       </header>
 
       {/* Main View Area */}
-      <main className={`flex-1 ${activeTab === 'remote' || activeTab === 'screen' ? 'overflow-hidden p-2 flex flex-col touch-none' : 'overflow-y-auto px-4 py-4 space-y-4'}`}>
+      <main className={`flex-1 ${
+        activeTab === 'remote' 
+          ? 'overflow-hidden p-2 flex flex-col touch-none' 
+          : activeTab === 'screen'
+          ? 'overflow-y-auto px-3 py-3 space-y-3'
+          : 'overflow-y-auto px-4 py-4 space-y-4'
+      }`}>
         {activeTab === 'home' && (
           <div className="max-w-md mx-auto space-y-4">
             <ConnectionStatusCard />

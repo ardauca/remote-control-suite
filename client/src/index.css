@@ -35,3 +35,11 @@ html, body {
 .safe-bottom {
   padding-bottom: var(--sab);
 }
+
+.safe-left {
+  padding-left: var(--sal);
+}
+
+.safe-right {
+  padding-right: var(--sar);
+}
