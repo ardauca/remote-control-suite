@@ -1,0 +1,38 @@
+# ==========================================
+# .NET / C# Build Artifacts
+# ==========================================
+[Bb]in/
+[Oo]bj/
+publish/
+*.user
+*.userosscache
+*.sln.docstates
+*.suo
+.vs/
+.vscode/
+
+# ==========================================
+# Node.js / React Client
+# ==========================================
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+client/dist/
+client/node_modules/
+
+# Web client build output embedded in server
+server/RemoteAgent/wwwroot/assets/
+server/RemoteAgent/wwwroot/index.html
+server/RemoteAgent/wwwroot/vite.svg
+
+# ==========================================
+# OS & Temporary Files
+# ==========================================
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.tmp
+*.log
