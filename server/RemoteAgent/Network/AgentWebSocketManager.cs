@@ -682,7 +682,7 @@ public sealed class ActiveConnection : IDisposable
         bool lockAcquired = false;
         try
         {
-            lockAcquired = await SendLock.WaitAsync(TimeSpan.FromSeconds(5), ct);
+            lockAcquired = await SendLock.WaitAsync(TimeSpan.FromSeconds(8), ct);
             if (!lockAcquired)
             {
                 return false;

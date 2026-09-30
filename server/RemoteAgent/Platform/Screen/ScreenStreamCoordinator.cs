@@ -170,6 +170,7 @@ public class ScreenStreamCoordinator : IDisposable
     private async Task ClientSenderLoopAsync(ClientStreamSession session, CancellationToken ct)
     {
         var sendSw = new Stopwatch();
+        int consecutiveFailures = 0;
 
         while (!ct.IsCancellationRequested)
         {
@@ -187,9 +188,17 @@ public class ScreenStreamCoordinator : IDisposable
 
                 if (!sent)
                 {
-                    break;
+                    consecutiveFailures++;
+                    session.RecordDropped();
+                    if (consecutiveFailures >= 5)
+                    {
+                        _logger.LogWarning("Sender loop terminating for {ConnectionId}: 5 consecutive send failures.", session.ConnectionId);
+                        break;
+                    }
+                    continue;
                 }
 
+                consecutiveFailures = 0;
                 session.RecordSent(packet.Length, sendSw.ElapsedMilliseconds);
             }
             catch (OperationCanceledException)
@@ -284,6 +293,11 @@ public class ClientStreamSession : IDisposable
         Interlocked.Increment(ref _framesSentInterval);
         Interlocked.Add(ref _bytesSentInterval, bytes);
         _lastSendDurationMs = sendDurationMs;
+    }
+
+    public void RecordDropped()
+    {
+        Interlocked.Increment(ref _framesDroppedInterval);
     }
 
     public ScreenTelemetryPayload ComputeTelemetry()

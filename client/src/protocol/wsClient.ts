@@ -14,9 +14,10 @@ class WebSocketClient {
   private binaryHandlers = new Set<(buffer: ArrayBuffer) => void>();
   private isManuallyClosed = false;
 
-  private readonly MIN_RECONNECT_DELAY = 1000;
-  private readonly MAX_RECONNECT_DELAY = 10000;
-  private readonly HEARTBEAT_INTERVAL = 3000;
+  private readonly MIN_RECONNECT_DELAY = 500;
+  private readonly MAX_RECONNECT_DELAY = 3000;
+  private readonly HEARTBEAT_INTERVAL = 4000;
+  private readonly WATCHDOG_TIMEOUT = 25000;
 
   private lastPongTime = Date.now();
 
@@ -29,12 +30,8 @@ class WebSocketClient {
             useConnectionStore.getState().addLog('info', 'App resumed into foreground. Reconnecting...');
             this.reconnectImmediate();
           } else if (this.isConnected()) {
-            if (Date.now() - this.lastPongTime > 6000) {
-              useConnectionStore.getState().addLog('info', 'Stale connection detected upon resume. Refreshing...');
-              this.reconnectImmediate();
-            } else {
-              this.send('heartbeat', 'system.ping', { clientTime: Date.now() });
-            }
+            // Proactively verify connection with instant ping instead of killing working socket
+            this.send('heartbeat', 'system.ping', { clientTime: Date.now() });
           }
         }
       });
@@ -136,6 +133,8 @@ class WebSocketClient {
 
   private handleMessage(event: MessageEvent) {
     try {
+      this.lastPongTime = Date.now(); // Any frame or message proves socket and server are alive!
+
       // Check for binary messages (e.g. Screen Mirroring JPEG frames)
       if (typeof event.data !== 'string') {
         const buffer = event.data as ArrayBuffer;
@@ -202,8 +201,9 @@ class WebSocketClient {
     this.stopHeartbeat();
     this.heartbeatTimer = window.setInterval(() => {
       if (this.isConnected()) {
-        if (Date.now() - this.lastPongTime > 9000) {
-          useConnectionStore.getState().addLog('warn', 'Heartbeat timeout: Server unresponsive >9s. Reconnecting...');
+        const timeSinceLastData = Date.now() - this.lastPongTime;
+        if (timeSinceLastData > this.WATCHDOG_TIMEOUT) {
+          useConnectionStore.getState().addLog('warn', `Heartbeat timeout: No data for ${(timeSinceLastData / 1000).toFixed(0)}s. Reconnecting...`);
           this.reconnectImmediate();
           return;
         }
@@ -227,9 +227,9 @@ class WebSocketClient {
     store.incrementReconnectAttempts();
 
     const attempts = store.reconnectAttempts;
-    // Exponential backoff with jitter: min(1000 * 1.5^(attempts), 10000)
+    // Fast reconnect for local Wi-Fi: 500ms, 650ms, 850ms, max 3000ms
     const delay = Math.min(
-      this.MIN_RECONNECT_DELAY * Math.pow(1.5, Math.min(attempts, 8)),
+      this.MIN_RECONNECT_DELAY * Math.pow(1.3, Math.min(attempts, 6)),
       this.MAX_RECONNECT_DELAY
     );
 
