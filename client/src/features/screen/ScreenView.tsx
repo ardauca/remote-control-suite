@@ -47,7 +47,6 @@ export const ScreenView: React.FC = () => {
   // Fullscreen & Rotation state
   const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
   const [isRotated90, setIsRotated90] = useState<boolean>(false);
-  const [isControlsMinimized, setIsControlsMinimized] = useState<boolean>(false);
   const [showNormalTelemetry, setShowNormalTelemetry] = useState<boolean>(false);
 
   // Zoom & Pan state
@@ -437,10 +436,10 @@ export const ScreenView: React.FC = () => {
   };
 
   const presetsConfig: Array<{ id: ScreenPreset; label: string; sub: string; icon: React.FC<{ className?: string }> }> = [
-    { id: 'mobile', label: 'Mobil Veri', sub: '8 FPS • 540p', icon: Smartphone },
+    { id: 'mobile', label: 'Mobil', sub: '8 FPS • 540p', icon: Smartphone },
     { id: 'balanced', label: 'Dengeli', sub: '15 FPS • 720p', icon: Wifi },
-    { id: 'high', label: 'Wi-Fi Yüksek', sub: '25 FPS • 1080p', icon: Maximize2 },
-    { id: 'snapshot', label: 'Tek Kare', sub: '0 MB Sürekli', icon: Camera }
+    { id: 'high', label: 'Wi-Fi HD', sub: '25 FPS • 1080p', icon: Maximize2 },
+    { id: 'snapshot', label: 'Tek Kare', sub: '0 MB • Statik', icon: Camera }
   ];
 
   // Helper for rendering the interactive canvas and vector cursor
@@ -522,142 +521,109 @@ export const ScreenView: React.FC = () => {
             <span>{telemetry?.bytesPerSecond ? `${Math.round(telemetry.bytesPerSecond / 1024)} KB/s` : '0 KB/s'}</span>
           </div>
 
-          {/* Fullscreen Floating Controls Dock (Top-Right, Collapsible, Never Blocks Taskbar) */}
-          {isControlsMinimized ? (
-            <div 
-              onPointerDown={(e) => e.stopPropagation()}
-              onTouchStart={(e) => e.stopPropagation()}
-              style={{
-                top: 'calc(env(safe-area-inset-top, 0px) + 12px)',
-                right: 'calc(env(safe-area-inset-right, 0px) + 12px)',
+          {/* Fullscreen Floating Controls Dock (Alt Ortada, Geniş ve Rahat Dokunmatik) */}
+          <div 
+            onPointerDown={(e) => e.stopPropagation()}
+            onTouchStart={(e) => e.stopPropagation()}
+            style={{
+              bottom: 'calc(env(safe-area-inset-bottom, 0px) + 16px)',
+            }}
+            className="absolute z-40 left-1/2 -translate-x-1/2 flex items-center gap-2 bg-dark-900/90 border border-slate-700/80 backdrop-blur-2xl p-2 rounded-2xl shadow-2xl transition-all max-w-[95vw] select-none"
+          >
+            {/* Primary Action: Direct Exit Fullscreen (Large, High Contrast, 1-Tap) */}
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                vibrate(15);
+                toggleFullscreen();
               }}
-              className="absolute z-40 flex items-center gap-2 select-none"
+              className="h-12 px-4 rounded-xl bg-rose-600 hover:bg-rose-500 active:bg-rose-700 text-white font-bold text-xs flex items-center gap-1.5 shadow-lg shadow-rose-950/60 border border-rose-400/40 active:scale-95 transition-all select-none"
+              title="Tam Ekrandan Çık"
             >
+              <X className="w-5 h-5 text-white" />
+              <span className="font-bold tracking-wide">Kapat</span>
+            </button>
+
+            {/* Direct 90° Rotation Toggle */}
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                vibrate(15);
+                setIsRotated90((r) => !r);
+              }}
+              className={`h-12 px-3.5 rounded-xl border flex items-center gap-1.5 font-bold text-xs active:scale-95 transition-all shadow-md select-none ${
+                isRotated90
+                  ? 'bg-brand-600 text-white border-brand-400 shadow-brand-500/30'
+                  : 'bg-slate-800 hover:bg-slate-700 text-slate-200 border-slate-700'
+              }`}
+              title={isRotated90 ? 'Dikey Mod' : '90° Yatay Mod'}
+            >
+              <RotateCw className={`w-4 h-4 ${isRotated90 ? 'text-white' : 'text-amber-400'}`} />
+              <span>90°</span>
+            </button>
+
+            {/* Zoom Stepper */}
+            <div className="flex items-center bg-slate-800/90 rounded-xl border border-slate-700 h-12 px-1">
               <button
                 onClick={(e) => {
                   e.stopPropagation();
-                  vibrate(15);
-                  toggleFullscreen();
+                  handleZoomChange(-0.5);
                 }}
-                className="w-11 h-11 rounded-full bg-rose-600/90 hover:bg-rose-500 border border-rose-400/50 backdrop-blur-xl flex items-center justify-center text-white shadow-xl shadow-rose-950/60 active:scale-90 transition-transform"
-                title="Tam Ekrandan Çık"
+                disabled={zoom <= 1}
+                className="w-9 h-9 rounded-lg flex items-center justify-center text-slate-300 disabled:opacity-30 active:scale-95"
+                title="Uzaklaştır"
               >
-                <X className="w-5 h-5 text-white" />
+                <ZoomOut className="w-4 h-4" />
               </button>
-
               <button
                 onClick={(e) => {
                   e.stopPropagation();
                   vibrate(10);
-                  setIsControlsMinimized(false);
+                  setZoom(1.0);
+                  setPan({ x: 0, y: 0 });
                 }}
-                className="w-11 h-11 rounded-full bg-dark-900/90 hover:bg-dark-800 border border-slate-700/80 backdrop-blur-xl flex items-center justify-center text-cyan-400 shadow-xl active:scale-90 transition-transform"
-                title="Ayarları Göster"
+                className="px-2 text-xs font-mono font-bold text-cyan-400 active:scale-95"
+                title="Sıfırla"
               >
-                <Sliders className="w-5 h-5" />
+                {zoom.toFixed(1)}x
+              </button>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleZoomChange(0.5);
+                }}
+                disabled={zoom >= 3}
+                className="w-9 h-9 rounded-lg flex items-center justify-center text-slate-300 disabled:opacity-30 active:scale-95"
+                title="Yakınlaştır"
+              >
+                <ZoomIn className="w-4 h-4" />
               </button>
             </div>
-          ) : (
-            <div 
-              onPointerDown={(e) => e.stopPropagation()}
-              onTouchStart={(e) => e.stopPropagation()}
-              style={{
-                top: 'calc(env(safe-area-inset-top, 0px) + 12px)',
-                right: 'calc(env(safe-area-inset-right, 0px) + 12px)',
+
+            {/* Pan Toggle */}
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                vibrate(10);
+                setIsPanMode(!isPanMode);
               }}
-              className="absolute z-40 flex items-center gap-1.5 bg-dark-900/95 border border-slate-700/80 backdrop-blur-2xl p-1.5 rounded-2xl shadow-2xl transition-all select-none max-w-[95vw]"
+              className={`h-12 px-3.5 rounded-xl border font-bold text-xs transition-all active:scale-95 select-none ${
+                isPanMode 
+                  ? 'bg-brand-500 text-white border-brand-400 shadow-md shadow-brand-500/25' 
+                  : 'bg-slate-800 hover:bg-slate-700 text-slate-300 border-slate-700'
+              }`}
+              title={isPanMode ? 'Pan Modu Aktif (Sürükle)' : 'Tıklama Modu'}
             >
-              {/* Primary Action: Direct Exit Fullscreen (Large, High Contrast, 1-Tap) */}
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  vibrate(15);
-                  toggleFullscreen();
-                }}
-                className="h-10 px-3 rounded-xl bg-rose-600 hover:bg-rose-500 active:bg-rose-700 text-white font-bold text-xs flex items-center gap-1 shadow-md shadow-rose-950/60 border border-rose-400/40 active:scale-95 transition-all"
-                title="Tam Ekrandan Çık"
-              >
-                <X className="w-4 h-4 text-white" />
-                <span>Kapat</span>
-              </button>
+              Pan
+            </button>
+          </div>
 
-              {/* Direct 90° Rotation Toggle */}
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  vibrate(15);
-                  setIsRotated90((r) => !r);
-                }}
-                className={`h-10 px-2.5 rounded-xl border flex items-center gap-1 font-bold text-xs active:scale-95 transition-all shadow-md ${
-                  isRotated90
-                    ? 'bg-brand-600 text-white border-brand-400 shadow-brand-500/30'
-                    : 'bg-slate-800 hover:bg-slate-700 text-slate-200 border-slate-700'
-                }`}
-                title={isRotated90 ? 'Dikey Mod' : '90° Yatay Mod'}
-              >
-                <RotateCw className={`w-3.5 h-3.5 ${isRotated90 ? 'text-white' : 'text-amber-400'}`} />
-                <span>90°</span>
-              </button>
-
-              {/* Zoom Stepper */}
-              <div className="flex items-center bg-slate-800/90 rounded-xl border border-slate-700 h-10 px-1">
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleZoomChange(-0.5);
-                  }}
-                  disabled={zoom <= 1}
-                  className="w-7 h-7 rounded-lg flex items-center justify-center text-slate-300 disabled:opacity-30 active:scale-95"
-                  title="Uzaklaştır"
-                >
-                  <ZoomOut className="w-3.5 h-3.5" />
-                </button>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    vibrate(10);
-                    setZoom(1.0);
-                    setPan({ x: 0, y: 0 });
-                  }}
-                  className="px-1.5 text-xs font-mono font-bold text-cyan-400 active:scale-95"
-                  title="Sıfırla"
-                >
-                  {zoom.toFixed(1)}x
-                </button>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleZoomChange(0.5);
-                  }}
-                  disabled={zoom >= 3}
-                  className="w-7 h-7 rounded-lg flex items-center justify-center text-slate-300 disabled:opacity-30 active:scale-95"
-                  title="Yakınlaştır"
-                >
-                  <ZoomIn className="w-3.5 h-3.5" />
-                </button>
-              </div>
-
-              {/* Minimize Dock Button */}
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  vibrate(10);
-                  setIsControlsMinimized(true);
-                }}
-                className="h-10 w-9 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 flex items-center justify-center text-slate-400 hover:text-white active:scale-95 transition-all"
-                title="Menüyü Küçült"
-              >
-                <ChevronUp className="w-4 h-4" />
-              </button>
-            </div>
-          )}
-
-          {/* Virtual Mini-Joystick (Visible when Zoom > 1.0 for 360° Desktop Panning) */}
+          {/* Virtual Mini-Joystick (Visible when Zoom > 1.0, positioned cleanly above bottom dock) */}
           {zoom > 1.0 && (
             <div
               style={{
-                bottom: 'calc(env(safe-area-inset-bottom, 0px) + 20px)',
-                left: 'calc(env(safe-area-inset-left, 0px) + 20px)',
+                bottom: 'calc(env(safe-area-inset-bottom, 0px) + 84px)',
+                left: 'calc(env(safe-area-inset-left, 0px) + 16px)',
               }}
               className="absolute z-40 flex flex-col items-center gap-1 select-none animate-fadeIn"
             >
@@ -672,7 +638,7 @@ export const ScreenView: React.FC = () => {
                     : 'border-slate-700/80 shadow-black/80'
                 }`}
               >
-                {/* Subtle Directional Crosshair Guides */}
+                {/* Directional Guides */}
                 <div className="absolute inset-0 pointer-events-none flex items-center justify-center opacity-25">
                   <div className="w-full h-px bg-slate-400" />
                   <div className="absolute h-full w-px bg-slate-400" />
@@ -703,16 +669,16 @@ export const ScreenView: React.FC = () => {
         /* ========================================================================= */
         /* 2. NORMAL SCREEN VIEW (Clean Canvas, Controls Above & Below Canvas)        */
         /* ========================================================================= */
-        <div className="w-full flex flex-col space-y-3 select-none pb-6 animate-fadeIn">
+        <div className="w-full flex flex-col space-y-2.5 select-none pb-8 animate-fadeIn">
           {/* Header Toolbar */}
-          <div className="shrink-0 flex items-center justify-between">
+          <div className="shrink-0 flex items-center justify-between gap-2">
             <div>
               <div className="flex items-center gap-2">
                 <h2 className="text-sm font-bold text-white flex items-center gap-1.5">
                   <MousePointer className="w-4 h-4 text-cyan-400" />
                   Ekran Ayna & Akış
                 </h2>
-                <span className={`px-1.5 py-0.5 text-[10px] font-bold rounded-md border ${
+                <span className={`px-1.5 py-0.5 text-[9px] font-bold rounded-md border tracking-wider ${
                   isStreaming 
                     ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30 animate-pulse' 
                     : 'bg-slate-800 text-slate-400 border-slate-700'
@@ -721,21 +687,31 @@ export const ScreenView: React.FC = () => {
                 </span>
               </div>
               <p className="text-[11px] text-slate-400">
-                {desktopDims.width}x{desktopDims.height} • Dokunarak tıkla
+                {desktopDims.width}×{desktopDims.height} • Dokunarak tıkla
               </p>
             </div>
 
             {/* Quick Action Controls */}
-            <div className="flex items-center gap-1.5">
-              {/* Rotate Button in Normal Mode */}
+            <div className="flex items-center gap-1.5 shrink-0">
+              {/* Prominent Fullscreen Hero Button */}
+              <button
+                onClick={toggleFullscreen}
+                className="h-9 px-3 rounded-xl bg-gradient-to-r from-brand-600 to-cyan-500 hover:from-brand-500 hover:to-cyan-400 text-white font-bold text-xs flex items-center gap-1.5 shadow-md shadow-brand-500/30 border border-brand-400/30 active:scale-95 transition-all select-none"
+                title="Tam Ekrana Geç"
+              >
+                <Maximize2 className="w-3.5 h-3.5" />
+                <span>Tam Ekran</span>
+              </button>
+
+              {/* 90° Rotate Button */}
               <button
                 onClick={() => {
                   vibrate(10);
                   setIsRotated90(!isRotated90);
                 }}
-                className={`p-2.5 rounded-xl border transition-all active:scale-95 ${
+                className={`w-9 h-9 rounded-xl border flex items-center justify-center transition-all active:scale-95 shadow-sm ${
                   isRotated90 
-                    ? 'bg-brand-600 text-white border-brand-400 shadow-md shadow-brand-500/20' 
+                    ? 'bg-brand-600 text-white border-brand-400 shadow-brand-500/20' 
                     : 'bg-dark-800 hover:bg-dark-700 text-slate-300 border-slate-700'
                 }`}
                 title="Görünümü Döndür"
@@ -743,34 +719,26 @@ export const ScreenView: React.FC = () => {
                 <RotateCw className="w-4 h-4 text-amber-400" />
               </button>
 
-              {/* Prominent Fullscreen Trigger */}
-              <button
-                onClick={toggleFullscreen}
-                className="px-3 py-2 rounded-xl bg-gradient-to-r from-brand-600 to-cyan-500 text-white font-semibold text-xs flex items-center gap-1.5 shadow-lg shadow-brand-500/25 active:scale-95 transition-all"
-                title="Tam Ekrana Geç"
-              >
-                <Maximize2 className="w-3.5 h-3.5" />
-                <span className="font-bold">Tam Ekran</span>
-              </button>
-
+              {/* Snapshot Button */}
               <button
                 onClick={() => {
                   vibrate(15);
                   requestSnapshot();
                 }}
                 title="Anlık Kare Al (Snapshot)"
-                className="p-2.5 rounded-xl bg-dark-800 hover:bg-dark-700 text-slate-300 border border-slate-700 active:scale-95 transition-all"
+                className="w-9 h-9 rounded-xl bg-dark-800 hover:bg-dark-700 text-slate-300 border border-slate-700 flex items-center justify-center active:scale-95 transition-all shadow-sm"
               >
                 <Camera className="w-4 h-4" />
               </button>
 
+              {/* Play/Pause Button */}
               <button
                 onClick={toggleStream}
                 title={isStreaming ? 'Akışı Duraklat' : 'Akışı Başlat'}
-                className={`p-2.5 rounded-xl border transition-all active:scale-95 shadow-md ${
+                className={`w-9 h-9 rounded-xl border flex items-center justify-center transition-all active:scale-95 shadow-sm ${
                   isStreaming
-                    ? 'bg-rose-500/20 text-rose-300 border-rose-500/40'
-                    : 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+                    ? 'bg-rose-500/20 text-rose-300 border-rose-500/40 hover:bg-rose-500/30'
+                    : 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40 hover:bg-emerald-500/30'
                 }`}
               >
                 {isStreaming ? <Pause className="w-4 h-4 fill-current" /> : <Play className="w-4 h-4 fill-current" />}
@@ -786,16 +754,20 @@ export const ScreenView: React.FC = () => {
             {renderInteractiveCanvas()}
           </div>
 
-          {/* Compact Zoom & Pan Bar (Below canvas, so it never blocks desktop clicks) */}
-          <div className="shrink-0 bg-dark-800/80 rounded-2xl p-2 border border-slate-800 flex items-center justify-between">
-            <span className="text-[11px] font-mono font-bold text-slate-400 pl-2">
-              Zoom: <span className="text-cyan-400">{zoom.toFixed(1)}x</span>
-            </span>
+          {/* Compact Zoom & Pan Bar */}
+          <div className="shrink-0 bg-dark-800/80 rounded-2xl p-2 border border-slate-800 flex items-center justify-between shadow-md">
+            <div className="flex items-center gap-2 pl-2">
+              <span className="text-[11px] font-semibold text-slate-400">Ölçek:</span>
+              <span className="px-2 py-0.5 rounded-md bg-dark-900 border border-slate-700 text-xs font-mono font-bold text-cyan-400">
+                {zoom.toFixed(1)}x
+              </span>
+            </div>
 
             <div className="flex items-center gap-1">
               <button
                 onClick={() => handleZoomChange(-0.5)}
-                className="p-1.5 rounded-lg bg-dark-900 border border-slate-700 text-slate-300 hover:text-white active:scale-95"
+                disabled={zoom <= 1}
+                className="w-8 h-8 rounded-lg bg-dark-900 border border-slate-700 text-slate-300 hover:text-white flex items-center justify-center disabled:opacity-30 active:scale-95 transition-all"
                 title="Uzaklaştır"
               >
                 <ZoomOut className="w-3.5 h-3.5" />
@@ -807,7 +779,7 @@ export const ScreenView: React.FC = () => {
                   setZoom(1.0);
                   setPan({ x: 0, y: 0 });
                 }}
-                className="px-2 py-1 rounded-lg bg-dark-900 border border-slate-700 text-[10px] font-mono font-bold text-slate-300 hover:text-cyan-400"
+                className="px-2.5 h-8 rounded-lg bg-dark-900 border border-slate-700 text-[11px] font-mono font-bold text-slate-300 hover:text-cyan-400 active:scale-95 transition-all"
                 title="Zoom Sıfırla"
               >
                 1.0x
@@ -815,7 +787,8 @@ export const ScreenView: React.FC = () => {
 
               <button
                 onClick={() => handleZoomChange(0.5)}
-                className="p-1.5 rounded-lg bg-dark-900 border border-slate-700 text-slate-300 hover:text-white active:scale-95"
+                disabled={zoom >= 3}
+                className="w-8 h-8 rounded-lg bg-dark-900 border border-slate-700 text-slate-300 hover:text-white flex items-center justify-center disabled:opacity-30 active:scale-95 transition-all"
                 title="Yakınlaştır"
               >
                 <ZoomIn className="w-3.5 h-3.5" />
@@ -826,31 +799,28 @@ export const ScreenView: React.FC = () => {
                   vibrate(5);
                   setIsPanMode(!isPanMode);
                 }}
-                className={`p-1.5 rounded-lg text-xs border transition-colors ${
+                className={`h-8 px-2.5 rounded-lg text-xs font-bold border transition-all flex items-center gap-1.5 active:scale-95 select-none ${
                   isPanMode 
-                    ? 'bg-brand-500 text-white border-brand-400 shadow-md shadow-brand-500/20' 
+                    ? 'bg-brand-500 text-white border-brand-400 shadow-md shadow-brand-500/25' 
                     : 'bg-dark-900 text-slate-400 border-slate-700 hover:text-white'
                 }`}
-                title={isPanMode ? 'Pan Modu Aktif (Sürükle)' : 'Dokunmatik Tık Modu'}
+                title={isPanMode ? 'Pan Modu Aktif (Sürükle)' : 'Tıklama Modu'}
               >
                 <Sliders className="w-3.5 h-3.5" />
+                <span>{isPanMode ? 'Kaydırılıyor' : 'Kaydır'}</span>
               </button>
             </div>
           </div>
 
-          {/* Compact Streaming Profiles & Live Data Rate */}
+          {/* Compact Streaming Profiles Card */}
           <div className="shrink-0 bg-dark-800/80 rounded-2xl p-3 border border-slate-800 shadow-md space-y-2">
             <div className="flex items-center justify-between">
               <span className="text-[11px] font-bold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
                 <Wifi className="w-3.5 h-3.5 text-brand-400" />
-                Yayın Profili
+                Yayın Kalitesi
               </span>
-              <span className="text-[10px] font-mono text-slate-400">
-                {telemetry?.estimatedMbPerMinute ? (
-                  <span className="text-amber-400 font-bold">~{telemetry.estimatedMbPerMinute} MB/dk</span>
-                ) : (
-                  <span className="text-slate-500">—</span>
-                )}
+              <span className="text-[10px] font-bold font-mono px-2 py-0.5 rounded-md bg-dark-900 border border-slate-700/80 text-cyan-400">
+                {presetsConfig.find(p => p.id === activePreset)?.label}
               </span>
             </div>
 
@@ -866,24 +836,24 @@ export const ScreenView: React.FC = () => {
                       vibrate(10);
                       setPreset(preset.id);
                     }}
-                    className={`py-1.5 px-1 rounded-lg flex flex-col items-center justify-center gap-0.5 transition-all text-center ${
+                    className={`py-2 px-1 rounded-lg flex flex-col items-center justify-center gap-1 transition-all text-center select-none ${
                       isSel 
-                        ? 'bg-brand-600 text-white font-bold shadow-md shadow-brand-500/25' 
-                        : 'text-slate-400 hover:text-slate-200'
+                        ? 'bg-gradient-to-b from-brand-600 to-brand-700 text-white font-bold shadow-md shadow-brand-500/30 border border-brand-400/40' 
+                        : 'text-slate-400 hover:text-slate-200 hover:bg-dark-800/60'
                     }`}
                   >
                     <Icon className="w-3.5 h-3.5" />
-                    <span className="text-[10px] leading-tight truncate w-full">{preset.label}</span>
+                    <span className="text-[10px] font-semibold leading-tight truncate w-full">{preset.label}</span>
                   </button>
                 );
               })}
             </div>
 
             {/* Active profile description & consumption estimate */}
-            <div className="flex items-center justify-between text-[10px] text-slate-400 pt-0.5 px-0.5 font-mono">
+            <div className="flex items-center justify-between text-[10px] text-slate-400 pt-0.5 px-1 font-mono">
               <span>{presetsConfig.find(p => p.id === activePreset)?.sub}</span>
-              <span>
-                {telemetry?.estimatedGbPerHour ? `~${telemetry.estimatedGbPerHour} GB/saat` : 'Tasarruf Modu'}
+              <span className="text-amber-400/90 font-medium">
+                {telemetry?.estimatedGbPerHour ? `Tahmini ~${telemetry.estimatedGbPerHour} GB/saat` : 'Tasarruf Modu'}
               </span>
             </div>
           </div>
@@ -894,20 +864,22 @@ export const ScreenView: React.FC = () => {
               onClick={() => setShowNormalTelemetry(!showNormalTelemetry)}
               className="flex items-center justify-between cursor-pointer select-none"
             >
-              <div className="flex items-center gap-2 text-xs font-mono text-slate-300">
-                <span className={`w-2 h-2 rounded-full ${isStreaming ? 'bg-emerald-400 animate-pulse' : 'bg-slate-500'}`} />
-                <span className="font-bold text-white">{telemetry?.actualFps ?? 0} FPS</span>
-                <span className="text-slate-600">|</span>
-                <span className="text-cyan-400">
+              <div className="flex items-center gap-2 text-xs font-mono">
+                <span className="flex items-center gap-1.5 font-bold text-white">
+                  <span className={`w-2 h-2 rounded-full ${isStreaming ? 'bg-emerald-400 animate-pulse' : 'bg-slate-500'}`} />
+                  {telemetry?.actualFps ?? 0} FPS
+                </span>
+                <span className="text-slate-700">•</span>
+                <span className="text-cyan-400 font-medium">
                   {telemetry?.bytesPerSecond ? `${Math.round(telemetry.bytesPerSecond / 1024)} KB/s` : '0 KB/s'}
                 </span>
-                <span className="text-slate-600">|</span>
-                <span className="text-amber-400">
+                <span className="text-slate-700">•</span>
+                <span className="text-amber-400 font-medium">
                   {telemetry?.estimatedMbPerMinute ? `${telemetry.estimatedMbPerMinute} MB/dk` : '—'}
                 </span>
               </div>
 
-              <div className="flex items-center gap-1 text-[11px] text-slate-400 hover:text-slate-200">
+              <div className="flex items-center gap-1 text-[11px] font-semibold text-slate-400 hover:text-white px-2 py-0.5 rounded-lg bg-dark-900 border border-slate-700/80 transition-colors">
                 <span>{showNormalTelemetry ? 'Gizle' : 'Detay'}</span>
                 {showNormalTelemetry ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
               </div>
@@ -915,20 +887,20 @@ export const ScreenView: React.FC = () => {
 
             {/* Collapsible Details */}
             {showNormalTelemetry && (
-              <div className="grid grid-cols-4 gap-1.5 pt-2.5 mt-2 border-t border-slate-800/80 text-center font-mono animate-fadeIn">
-                <div className="bg-dark-900 rounded-lg p-1 border border-slate-800">
+              <div className="grid grid-cols-4 gap-1.5 pt-2.5 mt-2 border-t border-slate-800 text-center font-mono animate-fadeIn">
+                <div className="bg-dark-900 rounded-lg p-1.5 border border-slate-800">
                   <div className="text-[9px] text-slate-500">Kuyruk</div>
                   <div className="text-xs font-bold text-slate-300">{telemetry?.queueDepth ?? 0}</div>
                 </div>
-                <div className="bg-dark-900 rounded-lg p-1 border border-slate-800">
+                <div className="bg-dark-900 rounded-lg p-1.5 border border-slate-800">
                   <div className="text-[9px] text-slate-500">Atlanan</div>
                   <div className="text-xs font-bold text-rose-400">{telemetry?.droppedFrames ?? 0}</div>
                 </div>
-                <div className="bg-dark-900 rounded-lg p-1 border border-slate-800">
+                <div className="bg-dark-900 rounded-lg p-1.5 border border-slate-800">
                   <div className="text-[9px] text-slate-500">Yakalama</div>
                   <div className="text-xs font-bold text-slate-300">{telemetry?.captureDurationMs ?? 0}ms</div>
                 </div>
-                <div className="bg-dark-900 rounded-lg p-1 border border-slate-800">
+                <div className="bg-dark-900 rounded-lg p-1.5 border border-slate-800">
                   <div className="text-[9px] text-slate-500">Gönderme</div>
                   <div className="text-xs font-bold text-slate-300">{telemetry?.sendDurationMs ?? 0}ms</div>
                 </div>
