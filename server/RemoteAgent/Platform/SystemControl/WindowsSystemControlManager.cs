@@ -140,6 +140,87 @@ public class WindowsSystemControlManager : ISystemControlManager
         }
     }
 
+    public bool LaunchApp(string appName)
+    {
+        try
+        {
+            string? normalized = appName?.Trim().ToLowerInvariant();
+            _logger.LogInformation("LaunchApp requested: {AppName}", normalized);
+
+            switch (normalized)
+            {
+                case "chrome":
+                    // Try direct chrome or cmd start
+                    try
+                    {
+                        Process.Start(new ProcessStartInfo { FileName = "chrome.exe", UseShellExecute = true });
+                        return true;
+                    }
+                    catch
+                    {
+                        Process.Start(new ProcessStartInfo { FileName = "cmd.exe", Arguments = "/c start chrome", UseShellExecute = true, CreateNoWindow = true });
+                        return true;
+                    }
+
+                case "spotify":
+                    Process.Start(new ProcessStartInfo { FileName = "spotify:", UseShellExecute = true });
+                    return true;
+
+                case "notepad":
+                    Process.Start(new ProcessStartInfo { FileName = "notepad.exe", UseShellExecute = true });
+                    return true;
+
+                case "calc" or "calculator":
+                    Process.Start(new ProcessStartInfo { FileName = "calc.exe", UseShellExecute = true });
+                    return true;
+
+                case "explorer" or "files":
+                    Process.Start(new ProcessStartInfo { FileName = "explorer.exe", UseShellExecute = true });
+                    return true;
+
+                case "edge" or "msedge":
+                    Process.Start(new ProcessStartInfo { FileName = "msedge.exe", UseShellExecute = true });
+                    return true;
+
+                case "terminal" or "cmd":
+                    try
+                    {
+                        Process.Start(new ProcessStartInfo { FileName = "wt.exe", UseShellExecute = true });
+                    }
+                    catch
+                    {
+                        Process.Start(new ProcessStartInfo { FileName = "cmd.exe", UseShellExecute = true });
+                    }
+                    return true;
+
+                case "taskmanager" or "taskmgr":
+                    OpenTaskManager();
+                    return true;
+
+                case "discord":
+                    Process.Start(new ProcessStartInfo { FileName = "discord:", UseShellExecute = true });
+                    return true;
+
+                case "steam":
+                    Process.Start(new ProcessStartInfo { FileName = "steam:", UseShellExecute = true });
+                    return true;
+
+                case "vscode" or "code":
+                    Process.Start(new ProcessStartInfo { FileName = "cmd.exe", Arguments = "/c code", UseShellExecute = true, CreateNoWindow = true });
+                    return true;
+
+                default:
+                    _logger.LogWarning("LaunchApp: Unrecognized application '{AppName}'", appName);
+                    return false;
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to launch application '{AppName}'", appName);
+            return false;
+        }
+    }
+
     public void ScheduleShutdown(int timeoutSeconds)
     {
         lock (_lock)

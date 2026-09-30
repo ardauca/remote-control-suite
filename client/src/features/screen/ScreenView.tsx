@@ -17,8 +17,7 @@ import {
   ChevronDown,
   ChevronUp,
   RotateCw,
-  X,
-  Settings
+  X
 } from 'lucide-react';
 
 export const ScreenView: React.FC = () => {
@@ -44,10 +43,9 @@ export const ScreenView: React.FC = () => {
   const [desktopDims, setDesktopDims] = useState<{ width: number; height: number }>({ width: 1920, height: 1080 });
   const [boxDims, setBoxDims] = useState<{ width: number; height: number }>({ width: 320, height: 180 });
 
-  // Fullscreen, Rotation & Quick Menu state
+  // Fullscreen & Rotation state
   const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
   const [isRotated90, setIsRotated90] = useState<boolean>(false);
-  const [isMenuOpen, setIsMenuOpen] = useState<boolean>(false);
   const [showNormalTelemetry, setShowNormalTelemetry] = useState<boolean>(false);
 
   // Zoom & Pan state
@@ -66,11 +64,7 @@ export const ScreenView: React.FC = () => {
   // Handle Fullscreen toggle
   const toggleFullscreen = useCallback(() => {
     vibrate(15);
-    setIsFullscreen((prev) => {
-      const next = !prev;
-      setIsMenuOpen(false);
-      return next;
-    });
+    setIsFullscreen((prev) => !prev);
   }, []);
 
   // Aspect-fit calculator: computes precise width & height for containerRef inside wrapperRef
@@ -387,172 +381,116 @@ export const ScreenView: React.FC = () => {
           {/* Main Canvas Component - 100% of PC Screen is Clickable */}
           {renderInteractiveCanvas()}
 
-          {/* Minimal, Unobtrusive Floating Menu Trigger Button */}
-          {/* Sits safely in the corner letterbox area, taking near zero space */}
-          <button
-            onPointerDown={(e) => e.stopPropagation()}
-            onClick={(e) => {
-              e.stopPropagation();
-              vibrate(10);
-              setIsMenuOpen(true);
-            }}
+          {/* Top-Left Minimalist Telemetry Pill (Non-intrusive) */}
+          <div 
             style={{
               top: 'calc(env(safe-area-inset-top, 0px) + 12px)',
-              right: 'calc(env(safe-area-inset-right, 0px) + 12px)',
+              left: 'calc(env(safe-area-inset-left, 0px) + 12px)',
             }}
-            className="absolute z-30 w-10 h-10 rounded-full bg-dark-900/60 hover:bg-dark-900/90 active:bg-dark-900/95 border border-slate-700/70 backdrop-blur-md flex items-center justify-center text-slate-300 hover:text-white shadow-2xl opacity-40 hover:opacity-100 active:opacity-100 transition-all active:scale-90"
-            title="Ekran Menüsü"
+            className="absolute z-30 flex items-center gap-2 bg-dark-900/60 border border-slate-700/50 backdrop-blur-md px-2.5 py-1 rounded-full text-[10px] font-mono text-slate-300 pointer-events-none opacity-50"
           >
-            <Settings className="w-5 h-5 text-cyan-400" />
-          </button>
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+            <span>{telemetry?.actualFps ?? 0} FPS</span>
+            <span>•</span>
+            <span>{telemetry?.bytesPerSecond ? `${Math.round(telemetry.bytesPerSecond / 1024)} KB/s` : '0 KB/s'}</span>
+          </div>
 
-          {/* Quick Controls Modal / Action Sheet (Only visible when requested) */}
-          {isMenuOpen && (
-            <div 
-              onPointerDown={(e) => e.stopPropagation()}
-              onClick={() => setIsMenuOpen(false)}
-              className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-fadeIn"
+          {/* Fullscreen Floating Controls Dock (Direct, Large Touch Targets, 1-Tap Kapat) */}
+          <div 
+            onPointerDown={(e) => e.stopPropagation()}
+            onTouchStart={(e) => e.stopPropagation()}
+            style={{
+              bottom: 'calc(env(safe-area-inset-bottom, 0px) + 16px)',
+            }}
+            className="absolute z-40 left-1/2 -translate-x-1/2 flex items-center gap-2 bg-dark-900/90 border border-slate-700/80 backdrop-blur-2xl p-2 rounded-2xl shadow-2xl transition-all max-w-[95vw]"
+          >
+            {/* Primary Action: Direct Exit Fullscreen (Large, High Contrast, 1-Tap) */}
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                vibrate(15);
+                toggleFullscreen();
+              }}
+              className="h-12 px-4 rounded-xl bg-rose-600 hover:bg-rose-500 active:bg-rose-700 text-white font-bold text-xs flex items-center gap-1.5 shadow-lg shadow-rose-950/60 border border-rose-400/40 active:scale-95 transition-all select-none"
+              title="Tam Ekrandan Çık"
             >
-              <div 
-                onClick={(e) => e.stopPropagation()}
-                className="w-full max-w-sm bg-dark-900/95 border border-slate-700/80 rounded-3xl p-5 shadow-2xl space-y-4 font-sans text-slate-100 animate-fadeIn"
+              <X className="w-5 h-5 text-white" />
+              <span className="font-bold tracking-wide">Kapat</span>
+            </button>
+
+            {/* Direct 90° Rotation Toggle */}
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                vibrate(15);
+                setIsRotated90((r) => !r);
+              }}
+              className={`h-12 px-3.5 rounded-xl border flex items-center gap-1.5 font-bold text-xs active:scale-95 transition-all shadow-md select-none ${
+                isRotated90
+                  ? 'bg-brand-600 text-white border-brand-400 shadow-brand-500/30'
+                  : 'bg-slate-800 hover:bg-slate-700 text-slate-200 border-slate-700'
+              }`}
+              title={isRotated90 ? 'Dikey Mod' : '90° Yatay Mod'}
+            >
+              <RotateCw className={`w-4 h-4 ${isRotated90 ? 'text-white' : 'text-amber-400'}`} />
+              <span>90°</span>
+            </button>
+
+            {/* Zoom Stepper */}
+            <div className="flex items-center bg-slate-800/90 rounded-xl border border-slate-700 h-12 px-1">
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleZoomChange(-0.5);
+                }}
+                disabled={zoom <= 1}
+                className="w-9 h-9 rounded-lg flex items-center justify-center text-slate-300 disabled:opacity-30 active:scale-95"
+                title="Uzaklaştır"
               >
-                {/* Modal Header */}
-                <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-                  <div className="flex items-center gap-2">
-                    <div className="w-8 h-8 rounded-xl bg-brand-600/30 border border-brand-500/40 flex items-center justify-center text-brand-400">
-                      <Sliders className="w-4 h-4" />
-                    </div>
-                    <div>
-                      <h3 className="text-sm font-bold text-white">Ekran Kontrolleri</h3>
-                      <p className="text-[11px] text-slate-400">
-                        {desktopDims.width}x{desktopDims.height} • {telemetry?.actualFps ?? 0} FPS
-                      </p>
-                    </div>
-                  </div>
-
-                  <button
-                    onClick={() => setIsMenuOpen(false)}
-                    className="p-2 rounded-xl bg-slate-800 text-slate-400 hover:text-white active:scale-95 transition-all"
-                  >
-                    <X className="w-4 h-4" />
-                  </button>
-                </div>
-
-                {/* Primary Quick Actions */}
-                <div className="grid grid-cols-2 gap-2.5">
-                  {/* Exit Fullscreen */}
-                  <button
-                    onClick={() => {
-                      setIsMenuOpen(false);
-                      toggleFullscreen();
-                    }}
-                    className="p-3.5 rounded-2xl bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/40 flex flex-col items-center justify-center gap-1.5 active:scale-95 transition-all shadow-lg"
-                  >
-                    <X className="w-5 h-5 text-rose-400" />
-                    <span className="text-xs font-bold">Tam Ekrandan Çık</span>
-                  </button>
-
-                  {/* Rotate 90° */}
-                  <button
-                    onClick={() => {
-                      vibrate(15);
-                      setIsRotated90((r) => !r);
-                    }}
-                    className={`p-3.5 rounded-2xl border flex flex-col items-center justify-center gap-1.5 active:scale-95 transition-all shadow-lg ${
-                      isRotated90 
-                        ? 'bg-brand-600 text-white border-brand-400 shadow-brand-500/30' 
-                        : 'bg-dark-800 text-slate-200 border-slate-700 hover:border-slate-600'
-                    }`}
-                  >
-                    <RotateCw className={`w-5 h-5 ${isRotated90 ? 'text-white' : 'text-amber-400'}`} />
-                    <span className="text-xs font-bold">{isRotated90 ? 'Dikey Mod' : '90° Yatay Çevir'}</span>
-                  </button>
-                </div>
-
-                {/* Zoom & Pan Controls */}
-                <div className="bg-dark-800/80 rounded-2xl p-3 border border-slate-800 space-y-2">
-                  <div className="text-[11px] font-bold text-slate-400 uppercase tracking-wider flex items-center justify-between">
-                    <span>Yakınlaştırma & Konum</span>
-                    <span className="font-mono text-cyan-400">{zoom.toFixed(1)}x</span>
-                  </div>
-                  <div className="flex items-center justify-between gap-2">
-                    <button
-                      onClick={() => handleZoomChange(-0.5)}
-                      className="flex-1 py-2.5 rounded-xl bg-dark-900 border border-slate-700 flex items-center justify-center text-slate-300 active:scale-95"
-                      title="Uzaklaştır"
-                    >
-                      <ZoomOut className="w-4 h-4" />
-                    </button>
-                    <button
-                      onClick={() => {
-                        vibrate(10);
-                        setZoom(1.0);
-                        setPan({ x: 0, y: 0 });
-                      }}
-                      className="px-3.5 py-2.5 rounded-xl bg-dark-900 border border-slate-700 text-xs font-mono font-bold text-slate-300 active:scale-95 hover:text-white"
-                      title="Sıfırla"
-                    >
-                      1.0x
-                    </button>
-                    <button
-                      onClick={() => handleZoomChange(0.5)}
-                      className="flex-1 py-2.5 rounded-xl bg-dark-900 border border-slate-700 flex items-center justify-center text-slate-300 active:scale-95"
-                      title="Yakınlaştır"
-                    >
-                      <ZoomIn className="w-4 h-4" />
-                    </button>
-                    <button
-                      onClick={() => {
-                        vibrate(10);
-                        setIsPanMode(!isPanMode);
-                      }}
-                      className={`px-3.5 py-2.5 rounded-xl border text-xs font-bold transition-all active:scale-95 ${
-                        isPanMode 
-                          ? 'bg-brand-500 text-white border-brand-400 shadow-md shadow-brand-500/25' 
-                          : 'bg-dark-900 text-slate-400 border-slate-700'
-                      }`}
-                      title={isPanMode ? 'Pan Modu Aktif' : 'Tıklama Modu'}
-                    >
-                      Pan
-                    </button>
-                  </div>
-                </div>
-
-                {/* Telemetry Summary */}
-                <div className="bg-dark-800/80 rounded-2xl p-3 border border-slate-800 space-y-1.5 text-xs font-mono">
-                  <div className="flex justify-between">
-                    <span className="text-slate-400">Canlı FPS:</span>
-                    <span className="text-emerald-400 font-bold">{telemetry?.actualFps ?? 0} FPS</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-slate-400">Bant Genişliği:</span>
-                    <span className="text-cyan-400 font-bold">
-                      {telemetry?.bytesPerSecond ? `${Math.round(telemetry.bytesPerSecond / 1024)} KB/s` : '0 KB/s'}
-                    </span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-slate-400">Veri Tüketimi:</span>
-                    <span className="text-amber-400 font-bold">
-                      {telemetry?.estimatedMbPerMinute ? `~${telemetry.estimatedMbPerMinute} MB/dk` : '—'}
-                    </span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-slate-400">Gecikme (İşlem):</span>
-                    <span>{telemetry?.captureDurationMs ?? 0} ms</span>
-                  </div>
-                </div>
-
-                {/* Return to Desktop Button */}
-                <button
-                  onClick={() => setIsMenuOpen(false)}
-                  className="w-full py-3 rounded-2xl bg-brand-600 hover:bg-brand-500 text-white text-xs font-bold shadow-lg shadow-brand-500/25 active:scale-95 transition-all text-center"
-                >
-                  Masaüstüne Dön (Dokunarak Kullan)
-                </button>
-              </div>
+                <ZoomOut className="w-4 h-4" />
+              </button>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  vibrate(10);
+                  setZoom(1.0);
+                  setPan({ x: 0, y: 0 });
+                }}
+                className="px-2 text-xs font-mono font-bold text-cyan-400 active:scale-95"
+                title="Sıfırla"
+              >
+                {zoom.toFixed(1)}x
+              </button>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleZoomChange(0.5);
+                }}
+                disabled={zoom >= 3}
+                className="w-9 h-9 rounded-lg flex items-center justify-center text-slate-300 disabled:opacity-30 active:scale-95"
+                title="Yakınlaştır"
+              >
+                <ZoomIn className="w-4 h-4" />
+              </button>
             </div>
-          )}
+
+            {/* Pan Toggle */}
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                vibrate(10);
+                setIsPanMode(!isPanMode);
+              }}
+              className={`h-12 px-3.5 rounded-xl border font-bold text-xs transition-all active:scale-95 select-none ${
+                isPanMode 
+                  ? 'bg-brand-500 text-white border-brand-400 shadow-md shadow-brand-500/25' 
+                  : 'bg-slate-800 hover:bg-slate-700 text-slate-300 border-slate-700'
+              }`}
+              title={isPanMode ? 'Pan Modu Aktif (Sürükle)' : 'Tıklama Modu'}
+            >
+              Pan
+            </button>
+          </div>
         </div>
       ) : (
         /* ========================================================================= */

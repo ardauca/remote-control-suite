@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useMediaStore } from '../../stores/mediaStore';
 import { wsClient } from '../../protocol/wsClient';
 import { 
@@ -13,7 +13,16 @@ import {
   Music, 
   Sliders, 
   RefreshCw,
-  AppWindow
+  AppWindow,
+  Globe,
+  FileText,
+  Calculator,
+  Folder,
+  Activity,
+  Terminal,
+  MessageSquare,
+  Sparkles,
+  Check
 } from 'lucide-react';
 
 export const MediaControlView: React.FC = () => {
@@ -26,6 +35,8 @@ export const MediaControlView: React.FC = () => {
     toggleSessionMute, 
     executeMediaAction 
   } = useMediaStore();
+
+  const [launchedApp, setLaunchedApp] = useState<string | null>(null);
 
   // Poll / request state on mount
   useEffect(() => {
@@ -60,8 +71,17 @@ export const MediaControlView: React.FC = () => {
     }
   };
 
+  const handleLaunchApp = (appId: string, appName: string) => {
+    if ('vibrate' in navigator) navigator.vibrate(15);
+    wsClient.send('command', 'system.launchApp', { app: appId });
+    setLaunchedApp(appName);
+    window.setTimeout(() => {
+      setLaunchedApp(null);
+    }, 2500);
+  };
+
   return (
-    <div className="w-full space-y-4 select-none animate-fadeIn">
+    <div className="w-full space-y-4 select-none animate-fadeIn pb-16">
       {/* 1. Header with Refresh */}
       <div className="flex items-center justify-between">
         <div>
@@ -176,7 +196,49 @@ export const MediaControlView: React.FC = () => {
         </div>
       </div>
 
-      {/* 3. Master Volume Card */}
+      {/* 3. Quick App Launcher (Hızlı Program Başlatıcı) */}
+      <div className="shrink-0 bg-dark-800/80 rounded-3xl p-4 border border-slate-700/60 shadow-xl space-y-3">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2 text-xs font-bold text-slate-200 uppercase tracking-wider">
+            <Sparkles className="w-4 h-4 text-cyan-400" />
+            Hızlı Program Başlatıcı
+          </div>
+          {launchedApp && (
+            <span className="text-[11px] font-medium text-emerald-400 animate-fadeIn flex items-center gap-1">
+              <Check className="w-3.5 h-3.5" />
+              {launchedApp} açılıyor...
+            </span>
+          )}
+        </div>
+
+        <div className="grid grid-cols-4 gap-2">
+          {[
+            { id: 'chrome', name: 'Chrome', icon: Globe, color: 'text-amber-400 hover:border-amber-500/50' },
+            { id: 'spotify', name: 'Spotify', icon: Music, color: 'text-emerald-400 hover:border-emerald-500/50' },
+            { id: 'notepad', name: 'Not Defteri', icon: FileText, color: 'text-sky-400 hover:border-sky-500/50' },
+            { id: 'calc', name: 'Hesap Mak.', icon: Calculator, color: 'text-purple-400 hover:border-purple-500/50' },
+            { id: 'explorer', name: 'Dosyalar', icon: Folder, color: 'text-yellow-400 hover:border-yellow-500/50' },
+            { id: 'taskmanager', name: 'Görev Yön.', icon: Activity, color: 'text-rose-400 hover:border-rose-500/50' },
+            { id: 'terminal', name: 'Terminal', icon: Terminal, color: 'text-slate-200 hover:border-slate-500/50' },
+            { id: 'discord', name: 'Discord', icon: MessageSquare, color: 'text-indigo-400 hover:border-indigo-500/50' },
+          ].map((app) => {
+            const Icon = app.icon;
+            return (
+              <button
+                key={app.id}
+                onClick={() => handleLaunchApp(app.id, app.name)}
+                className={`h-16 rounded-2xl bg-dark-900 border border-slate-700/80 flex flex-col items-center justify-center gap-1 transition-all active:scale-90 shadow-md ${app.color}`}
+                title={`${app.name} Başlat`}
+              >
+                <Icon className="w-5 h-5" />
+                <span className="text-[10px] font-semibold text-slate-300 truncate max-w-[90%]">{app.name}</span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* 4. Master Volume Card */}
       <div className="shrink-0 bg-dark-800/80 rounded-3xl p-5 border border-slate-700/60 shadow-xl space-y-4">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2.5">

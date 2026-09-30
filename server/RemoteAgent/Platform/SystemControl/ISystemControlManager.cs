@@ -19,6 +19,7 @@ public interface ISystemControlManager : IDisposable
     void CancelScheduledShutdown();
     void ShutdownNow();
     void RestartNow();
+    bool LaunchApp(string appName);
 
     PowerStatusPayload GetCurrentPowerStatus();
 }

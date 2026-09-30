@@ -82,11 +82,6 @@ export const PowerSystemView: React.FC = () => {
     setConfirmDialog({ isOpen: false, action: null, title: '', description: '' });
   };
 
-  const handleSchedulePreset = (minutes: number) => {
-    vibrate(15);
-    scheduleShutdown(minutes * 60, targetAction);
-  };
-
   const handleCustomSchedule = (e: React.FormEvent) => {
     e.preventDefault();
     if (customMinutes > 0) {
@@ -210,37 +205,22 @@ export const PowerSystemView: React.FC = () => {
           </div>
         </div>
 
-        <p className="text-xs text-slate-400">
-          Belirttiğiniz süre sonunda Windows otomatik olarak {targetAction === 'shutdown' ? 'kapanır' : 'yeniden başlar'}.
-        </p>
-
-        {/* Quick Presets Grid */}
-        <div className="grid grid-cols-3 gap-2">
-          {[
-            { label: '15 dk', min: 15 },
-            { label: '30 dk', min: 30, primary: true },
-            { label: '45 dk', min: 45 },
-            { label: '1 Saat', min: 60 },
-            { label: '1.5 Saat', min: 90 },
-            { label: '2 Saat', min: 120 }
-          ].map((preset) => (
-            <button
-              key={preset.min}
-              onClick={() => handleSchedulePreset(preset.min)}
-              className={`h-12 rounded-2xl flex flex-col items-center justify-center font-bold text-xs transition-all active:scale-95 border ${
-                preset.primary
-                  ? 'bg-brand-500/20 text-brand-300 border-brand-500/50 hover:bg-brand-500/30 shadow-lg shadow-brand-500/10'
-                  : 'bg-dark-900 text-slate-300 border-slate-700 hover:bg-dark-700'
-              }`}
-            >
-              <span>{preset.label}</span>
-              <span className="text-[9px] text-slate-400 font-normal font-mono">sonra kapat</span>
-            </button>
-          ))}
-        </div>
-
-        {/* Custom Minutes Input Form */}
+        {/* Compact Custom Minutes Scheduler (Single Row Stepper & Start) */}
         <form onSubmit={handleCustomSchedule} className="flex items-center gap-2 pt-1">
+          {/* Quick -10m */}
+          <button
+            type="button"
+            onClick={() => {
+              vibrate(10);
+              setCustomMinutes((m) => Math.max(5, m - 10));
+            }}
+            className="w-11 h-11 rounded-xl bg-dark-900 border border-slate-700 text-slate-300 font-bold text-xs hover:bg-dark-700 active:scale-95 transition-all flex items-center justify-center"
+            title="10 dakika azalt"
+          >
+            -10
+          </button>
+
+          {/* Number Input with Dakika Label */}
           <div className="relative flex-1">
             <input
               type="number"
@@ -248,16 +228,31 @@ export const PowerSystemView: React.FC = () => {
               max="720"
               value={customMinutes}
               onChange={(e) => setCustomMinutes(Math.max(1, parseInt(e.target.value) || 1))}
-              className="w-full h-11 bg-dark-900 border border-slate-700 rounded-xl px-3 text-sm text-white font-mono focus:outline-none focus:border-brand-500"
-              placeholder="Dakika girin"
+              className="w-full h-11 bg-dark-900 border border-slate-700 rounded-xl pl-3 pr-14 text-base font-bold text-white font-mono focus:outline-none focus:border-brand-500 text-center"
+              placeholder="Süre"
             />
-            <span className="absolute right-3 top-3 text-xs text-slate-400">dakika</span>
+            <span className="absolute right-3 top-3 text-xs text-slate-400 font-medium pointer-events-none">dakika</span>
           </div>
+
+          {/* Quick +10m */}
+          <button
+            type="button"
+            onClick={() => {
+              vibrate(10);
+              setCustomMinutes((m) => Math.min(720, m + 10));
+            }}
+            className="w-11 h-11 rounded-xl bg-dark-900 border border-slate-700 text-slate-300 font-bold text-xs hover:bg-dark-700 active:scale-95 transition-all flex items-center justify-center"
+            title="10 dakika artır"
+          >
+            +10
+          </button>
+
+          {/* Start Button */}
           <button
             type="submit"
-            className="h-11 px-4 rounded-xl bg-gradient-to-r from-brand-500 to-indigo-600 hover:from-brand-600 hover:to-indigo-700 active:scale-95 text-white font-bold text-xs shadow-md shadow-brand-500/20 transition-all flex items-center gap-1.5"
+            className="h-11 px-4 rounded-xl bg-gradient-to-r from-brand-500 to-indigo-600 hover:from-brand-600 hover:to-indigo-700 active:scale-95 text-white font-bold text-xs shadow-md shadow-brand-500/25 transition-all flex items-center gap-1.5"
           >
-            <Clock className="w-3.5 h-3.5" />
+            <Clock className="w-4 h-4" />
             Başlat
           </button>
         </form>

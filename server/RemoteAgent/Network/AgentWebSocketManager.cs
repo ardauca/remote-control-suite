@@ -490,6 +490,19 @@ public class AgentWebSocketManager
                     _systemControlManager.CancelScheduledShutdown();
                     break;
 
+                case ActionTypes.SystemLaunchApp:
+                    if (!IsAuthorized(connectionId)) { await SendUnauthorizedAsync(conn); return; }
+                    if (root.TryGetProperty("payload", out var launchPayload) &&
+                        launchPayload.TryGetProperty("app", out var appProp))
+                    {
+                        var appName = appProp.GetString();
+                        if (!string.IsNullOrEmpty(appName))
+                        {
+                            _systemControlManager.LaunchApp(appName);
+                        }
+                    }
+                    break;
+
                 // Auth & Pairing (WAN Security)
                 case ActionTypes.AuthLogin:
                     if (root.TryGetProperty("payload", out var loginPayload) &&

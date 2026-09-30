@@ -6,6 +6,7 @@ public static class ActionTypes
     public const string SystemPong = "system.pong";
     public const string SystemHello = "system.hello";
     public const string SystemError = "system.error";
+    public const string SystemLaunchApp = "system.launchApp";
 
     // Mouse & Touchpad (Phase 3)
     public const string MouseMove = "mouse.move";
