@@ -162,6 +162,39 @@ public class WindowsSystemControlManager : ISystemControlManager
                         return true;
                     }
 
+                case "ytmusic" or "youtubemusic":
+                    try
+                    {
+                        var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+                        var chromeAppsDir = Path.Combine(appData, @"Microsoft\Windows\Start Menu\Programs\Chrome Uygulamaları");
+                        var ytLnk = Path.Combine(chromeAppsDir, "YouTube Music.lnk");
+                        if (File.Exists(ytLnk))
+                        {
+                            Process.Start(new ProcessStartInfo { FileName = ytLnk, UseShellExecute = true });
+                            return true;
+                        }
+
+                        var progDir = Path.Combine(appData, @"Microsoft\Windows\Start Menu\Programs");
+                        if (Directory.Exists(progDir))
+                        {
+                            var matches = Directory.GetFiles(progDir, "*YouTube Music*.lnk", SearchOption.AllDirectories);
+                            if (matches.Length > 0)
+                            {
+                                Process.Start(new ProcessStartInfo { FileName = matches[0], UseShellExecute = true });
+                                return true;
+                            }
+                        }
+
+                        // Fallback to Chrome App mode or URL
+                        Process.Start(new ProcessStartInfo { FileName = "chrome.exe", Arguments = "--app=https://music.youtube.com", UseShellExecute = true });
+                        return true;
+                    }
+                    catch
+                    {
+                        Process.Start(new ProcessStartInfo { FileName = "https://music.youtube.com", UseShellExecute = true });
+                        return true;
+                    }
+
                 case "spotify":
                     Process.Start(new ProcessStartInfo { FileName = "spotify:", UseShellExecute = true });
                     return true;

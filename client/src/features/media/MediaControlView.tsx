@@ -214,7 +214,7 @@ export const MediaControlView: React.FC = () => {
         <div className="grid grid-cols-4 gap-2">
           {[
             { id: 'chrome', name: 'Chrome', icon: Globe, color: 'text-amber-400 hover:border-amber-500/50' },
-            { id: 'spotify', name: 'Spotify', icon: Music, color: 'text-emerald-400 hover:border-emerald-500/50' },
+            { id: 'ytmusic', name: 'YT Music', icon: Music, color: 'text-rose-400 hover:border-rose-500/50' },
             { id: 'notepad', name: 'Not Defteri', icon: FileText, color: 'text-sky-400 hover:border-sky-500/50' },
             { id: 'calc', name: 'Hesap Mak.', icon: Calculator, color: 'text-purple-400 hover:border-purple-500/50' },
             { id: 'explorer', name: 'Dosyalar', icon: Folder, color: 'text-yellow-400 hover:border-yellow-500/50' },

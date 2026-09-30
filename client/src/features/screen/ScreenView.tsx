@@ -17,7 +17,8 @@ import {
   ChevronDown,
   ChevronUp,
   RotateCw,
-  X
+  X,
+  Move
 } from 'lucide-react';
 
 export const ScreenView: React.FC = () => {
@@ -46,11 +47,20 @@ export const ScreenView: React.FC = () => {
   // Fullscreen & Rotation state
   const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
   const [isRotated90, setIsRotated90] = useState<boolean>(false);
+  const [isControlsMinimized, setIsControlsMinimized] = useState<boolean>(false);
   const [showNormalTelemetry, setShowNormalTelemetry] = useState<boolean>(false);
 
   // Zoom & Pan state
   const [isPanMode, setIsPanMode] = useState<boolean>(false);
   const [pan, setPan] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+
+  // Virtual Joystick state & refs
+  const [joystickKnob, setJoystickKnob] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const [isJoystickActive, setIsJoystickActive] = useState<boolean>(false);
+  const joystickVectorRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+  const joystickCenterRef = useRef<{ x: number; y: number } | null>(null);
+  const isJoystickActiveRef = useRef<boolean>(false);
+  const rafIdRef = useRef<number | null>(null);
 
   // Touch gesture state
   const touchStartRef = useRef<{ x: number; y: number; time: number } | null>(null);
@@ -199,15 +209,128 @@ export const ScreenView: React.FC = () => {
     prevStatusRef.current = connectionStatus;
   }, [connectionStatus, activePreset, startStream, requestSnapshot]);
 
-  // Normalized coordinate mapper respecting normal orientation and 90-degree software rotation
+  // Smooth RAF Pan loop while virtual joystick is pushed
+  useEffect(() => {
+    if (!isJoystickActive || zoom <= 1.0) {
+      if (rafIdRef.current) {
+        cancelAnimationFrame(rafIdRef.current);
+        rafIdRef.current = null;
+      }
+      return;
+    }
+
+    let isRunning = true;
+    const animatePan = () => {
+      const { x: vx, y: vy } = joystickVectorRef.current;
+      if (Math.abs(vx) > 0.05 || Math.abs(vy) > 0.05) {
+        // Dynamic speed based on zoom level and joystick deflection
+        const baseSpeed = 14 * Math.sqrt(zoom);
+
+        // Calculate delta based on orientation
+        let deltaX = -vx * baseSpeed;
+        let deltaY = -vy * baseSpeed;
+
+        if (isRotated90) {
+          // In 90deg CW rotated view, adjust direction vectors
+          deltaX = vy * baseSpeed;
+          deltaY = -vx * baseSpeed;
+        }
+
+        setPan((prev) => {
+          const maxPanX = Math.round(((boxDims.width || 320) * (zoom - 1)) / 2);
+          const maxPanY = Math.round(((boxDims.height || 180) * (zoom - 1)) / 2);
+          return {
+            x: Math.max(-maxPanX, Math.min(maxPanX, prev.x + deltaX)),
+            y: Math.max(-maxPanY, Math.min(maxPanY, prev.y + deltaY))
+          };
+        });
+      }
+
+      if (isRunning) {
+        rafIdRef.current = requestAnimationFrame(animatePan);
+      }
+    };
+
+    rafIdRef.current = requestAnimationFrame(animatePan);
+
+    return () => {
+      isRunning = false;
+      if (rafIdRef.current) cancelAnimationFrame(rafIdRef.current);
+    };
+  }, [isJoystickActive, zoom, isRotated90, boxDims.width, boxDims.height]);
+
+  const handleJoystickPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    e.stopPropagation();
+    const target = e.currentTarget;
+    const rect = target.getBoundingClientRect();
+    const centerX = rect.left + rect.width / 2;
+    const centerY = rect.top + rect.height / 2;
+    joystickCenterRef.current = { x: centerX, y: centerY };
+    try {
+      target.setPointerCapture(e.pointerId);
+    } catch {
+      // ignore
+    }
+
+    isJoystickActiveRef.current = true;
+    setIsJoystickActive(true);
+    vibrate(10);
+  };
+
+  const handleJoystickPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!isJoystickActiveRef.current || !joystickCenterRef.current) return;
+    e.stopPropagation();
+
+    const dx = e.clientX - joystickCenterRef.current.x;
+    const dy = e.clientY - joystickCenterRef.current.y;
+    const dist = Math.hypot(dx, dy);
+    const maxRadius = 26; // px travel distance
+
+    let clampedX = dx;
+    let clampedY = dy;
+    if (dist > maxRadius) {
+      clampedX = (dx / dist) * maxRadius;
+      clampedY = (dy / dist) * maxRadius;
+    }
+
+    const normVx = clampedX / maxRadius;
+    const normVy = clampedY / maxRadius;
+
+    joystickVectorRef.current = { x: normVx, y: normVy };
+    setJoystickKnob({ x: clampedX, y: clampedY });
+  };
+
+  const handleJoystickPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    e.stopPropagation();
+    isJoystickActiveRef.current = false;
+    setIsJoystickActive(false);
+    joystickCenterRef.current = null;
+    joystickVectorRef.current = { x: 0, y: 0 };
+    setJoystickKnob({ x: 0, y: 0 });
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    } catch {
+      // ignore
+    }
+  };
+
+  // Normalized coordinate mapper respecting normal orientation, 90-degree software rotation, zoom and pan
   const getNormalizedCoords = (clientX: number, clientY: number) => {
     const el = containerRef.current;
     if (!el) return null;
     const rect = el.getBoundingClientRect();
 
     if (!isRotated90) {
-      const normX = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
-      const normY = Math.max(0, Math.min(1, (clientY - rect.top) / rect.height));
+      // 1. Position relative to container box
+      const visualX = clientX - rect.left;
+      const visualY = clientY - rect.top;
+
+      // 2. Invert zoom & pan transform (which expands from center)
+      const cx = (boxDims.width / 2) + (visualX - (boxDims.width / 2) - pan.x) / zoom;
+      const cy = (boxDims.height / 2) + (visualY - (boxDims.height / 2) - pan.y) / zoom;
+
+      const normX = Math.max(0, Math.min(1, cx / (boxDims.width || 1)));
+      const normY = Math.max(0, Math.min(1, cy / (boxDims.height || 1)));
       return { normX, normY };
     } else {
       // 90-degree clockwise rotation math
@@ -220,8 +343,12 @@ export const ScreenView: React.FC = () => {
       const localX = dy;
       const localY = -dx;
 
-      const normX = Math.max(0, Math.min(1, (localX + boxDims.width / 2) / boxDims.width));
-      const normY = Math.max(0, Math.min(1, (localY + boxDims.height / 2) / boxDims.height));
+      // Invert zoom & pan transform
+      const cx = (boxDims.width / 2) + (localX - pan.x) / zoom;
+      const cy = (boxDims.height / 2) + (localY - pan.y) / zoom;
+
+      const normX = Math.max(0, Math.min(1, cx / (boxDims.width || 1)));
+      const normY = Math.max(0, Math.min(1, cy / (boxDims.height || 1)));
       return { normX, normY };
     }
   };
@@ -395,102 +522,182 @@ export const ScreenView: React.FC = () => {
             <span>{telemetry?.bytesPerSecond ? `${Math.round(telemetry.bytesPerSecond / 1024)} KB/s` : '0 KB/s'}</span>
           </div>
 
-          {/* Fullscreen Floating Controls Dock (Direct, Large Touch Targets, 1-Tap Kapat) */}
-          <div 
-            onPointerDown={(e) => e.stopPropagation()}
-            onTouchStart={(e) => e.stopPropagation()}
-            style={{
-              bottom: 'calc(env(safe-area-inset-bottom, 0px) + 16px)',
-            }}
-            className="absolute z-40 left-1/2 -translate-x-1/2 flex items-center gap-2 bg-dark-900/90 border border-slate-700/80 backdrop-blur-2xl p-2 rounded-2xl shadow-2xl transition-all max-w-[95vw]"
-          >
-            {/* Primary Action: Direct Exit Fullscreen (Large, High Contrast, 1-Tap) */}
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                vibrate(15);
-                toggleFullscreen();
+          {/* Fullscreen Floating Controls Dock (Top-Right, Collapsible, Never Blocks Taskbar) */}
+          {isControlsMinimized ? (
+            <div 
+              onPointerDown={(e) => e.stopPropagation()}
+              onTouchStart={(e) => e.stopPropagation()}
+              style={{
+                top: 'calc(env(safe-area-inset-top, 0px) + 12px)',
+                right: 'calc(env(safe-area-inset-right, 0px) + 12px)',
               }}
-              className="h-12 px-4 rounded-xl bg-rose-600 hover:bg-rose-500 active:bg-rose-700 text-white font-bold text-xs flex items-center gap-1.5 shadow-lg shadow-rose-950/60 border border-rose-400/40 active:scale-95 transition-all select-none"
-              title="Tam Ekrandan Çık"
+              className="absolute z-40 flex items-center gap-2 select-none"
             >
-              <X className="w-5 h-5 text-white" />
-              <span className="font-bold tracking-wide">Kapat</span>
-            </button>
-
-            {/* Direct 90° Rotation Toggle */}
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                vibrate(15);
-                setIsRotated90((r) => !r);
-              }}
-              className={`h-12 px-3.5 rounded-xl border flex items-center gap-1.5 font-bold text-xs active:scale-95 transition-all shadow-md select-none ${
-                isRotated90
-                  ? 'bg-brand-600 text-white border-brand-400 shadow-brand-500/30'
-                  : 'bg-slate-800 hover:bg-slate-700 text-slate-200 border-slate-700'
-              }`}
-              title={isRotated90 ? 'Dikey Mod' : '90° Yatay Mod'}
-            >
-              <RotateCw className={`w-4 h-4 ${isRotated90 ? 'text-white' : 'text-amber-400'}`} />
-              <span>90°</span>
-            </button>
-
-            {/* Zoom Stepper */}
-            <div className="flex items-center bg-slate-800/90 rounded-xl border border-slate-700 h-12 px-1">
               <button
                 onClick={(e) => {
                   e.stopPropagation();
-                  handleZoomChange(-0.5);
+                  vibrate(15);
+                  toggleFullscreen();
                 }}
-                disabled={zoom <= 1}
-                className="w-9 h-9 rounded-lg flex items-center justify-center text-slate-300 disabled:opacity-30 active:scale-95"
-                title="Uzaklaştır"
+                className="w-11 h-11 rounded-full bg-rose-600/90 hover:bg-rose-500 border border-rose-400/50 backdrop-blur-xl flex items-center justify-center text-white shadow-xl shadow-rose-950/60 active:scale-90 transition-transform"
+                title="Tam Ekrandan Çık"
               >
-                <ZoomOut className="w-4 h-4" />
+                <X className="w-5 h-5 text-white" />
               </button>
+
               <button
                 onClick={(e) => {
                   e.stopPropagation();
                   vibrate(10);
-                  setZoom(1.0);
-                  setPan({ x: 0, y: 0 });
+                  setIsControlsMinimized(false);
                 }}
-                className="px-2 text-xs font-mono font-bold text-cyan-400 active:scale-95"
-                title="Sıfırla"
+                className="w-11 h-11 rounded-full bg-dark-900/90 hover:bg-dark-800 border border-slate-700/80 backdrop-blur-xl flex items-center justify-center text-cyan-400 shadow-xl active:scale-90 transition-transform"
+                title="Ayarları Göster"
               >
-                {zoom.toFixed(1)}x
+                <Sliders className="w-5 h-5" />
               </button>
+            </div>
+          ) : (
+            <div 
+              onPointerDown={(e) => e.stopPropagation()}
+              onTouchStart={(e) => e.stopPropagation()}
+              style={{
+                top: 'calc(env(safe-area-inset-top, 0px) + 12px)',
+                right: 'calc(env(safe-area-inset-right, 0px) + 12px)',
+              }}
+              className="absolute z-40 flex items-center gap-1.5 bg-dark-900/95 border border-slate-700/80 backdrop-blur-2xl p-1.5 rounded-2xl shadow-2xl transition-all select-none max-w-[95vw]"
+            >
+              {/* Primary Action: Direct Exit Fullscreen (Large, High Contrast, 1-Tap) */}
               <button
                 onClick={(e) => {
                   e.stopPropagation();
-                  handleZoomChange(0.5);
+                  vibrate(15);
+                  toggleFullscreen();
                 }}
-                disabled={zoom >= 3}
-                className="w-9 h-9 rounded-lg flex items-center justify-center text-slate-300 disabled:opacity-30 active:scale-95"
-                title="Yakınlaştır"
+                className="h-10 px-3 rounded-xl bg-rose-600 hover:bg-rose-500 active:bg-rose-700 text-white font-bold text-xs flex items-center gap-1 shadow-md shadow-rose-950/60 border border-rose-400/40 active:scale-95 transition-all"
+                title="Tam Ekrandan Çık"
               >
-                <ZoomIn className="w-4 h-4" />
+                <X className="w-4 h-4 text-white" />
+                <span>Kapat</span>
+              </button>
+
+              {/* Direct 90° Rotation Toggle */}
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  vibrate(15);
+                  setIsRotated90((r) => !r);
+                }}
+                className={`h-10 px-2.5 rounded-xl border flex items-center gap-1 font-bold text-xs active:scale-95 transition-all shadow-md ${
+                  isRotated90
+                    ? 'bg-brand-600 text-white border-brand-400 shadow-brand-500/30'
+                    : 'bg-slate-800 hover:bg-slate-700 text-slate-200 border-slate-700'
+                }`}
+                title={isRotated90 ? 'Dikey Mod' : '90° Yatay Mod'}
+              >
+                <RotateCw className={`w-3.5 h-3.5 ${isRotated90 ? 'text-white' : 'text-amber-400'}`} />
+                <span>90°</span>
+              </button>
+
+              {/* Zoom Stepper */}
+              <div className="flex items-center bg-slate-800/90 rounded-xl border border-slate-700 h-10 px-1">
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleZoomChange(-0.5);
+                  }}
+                  disabled={zoom <= 1}
+                  className="w-7 h-7 rounded-lg flex items-center justify-center text-slate-300 disabled:opacity-30 active:scale-95"
+                  title="Uzaklaştır"
+                >
+                  <ZoomOut className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    vibrate(10);
+                    setZoom(1.0);
+                    setPan({ x: 0, y: 0 });
+                  }}
+                  className="px-1.5 text-xs font-mono font-bold text-cyan-400 active:scale-95"
+                  title="Sıfırla"
+                >
+                  {zoom.toFixed(1)}x
+                </button>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleZoomChange(0.5);
+                  }}
+                  disabled={zoom >= 3}
+                  className="w-7 h-7 rounded-lg flex items-center justify-center text-slate-300 disabled:opacity-30 active:scale-95"
+                  title="Yakınlaştır"
+                >
+                  <ZoomIn className="w-3.5 h-3.5" />
+                </button>
+              </div>
+
+              {/* Minimize Dock Button */}
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  vibrate(10);
+                  setIsControlsMinimized(true);
+                }}
+                className="h-10 w-9 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 flex items-center justify-center text-slate-400 hover:text-white active:scale-95 transition-all"
+                title="Menüyü Küçült"
+              >
+                <ChevronUp className="w-4 h-4" />
               </button>
             </div>
+          )}
 
-            {/* Pan Toggle */}
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                vibrate(10);
-                setIsPanMode(!isPanMode);
+          {/* Virtual Mini-Joystick (Visible when Zoom > 1.0 for 360° Desktop Panning) */}
+          {zoom > 1.0 && (
+            <div
+              style={{
+                bottom: 'calc(env(safe-area-inset-bottom, 0px) + 20px)',
+                left: 'calc(env(safe-area-inset-left, 0px) + 20px)',
               }}
-              className={`h-12 px-3.5 rounded-xl border font-bold text-xs transition-all active:scale-95 select-none ${
-                isPanMode 
-                  ? 'bg-brand-500 text-white border-brand-400 shadow-md shadow-brand-500/25' 
-                  : 'bg-slate-800 hover:bg-slate-700 text-slate-300 border-slate-700'
-              }`}
-              title={isPanMode ? 'Pan Modu Aktif (Sürükle)' : 'Tıklama Modu'}
+              className="absolute z-40 flex flex-col items-center gap-1 select-none animate-fadeIn"
             >
-              Pan
-            </button>
-          </div>
+              <div
+                onPointerDown={handleJoystickPointerDown}
+                onPointerMove={handleJoystickPointerMove}
+                onPointerUp={handleJoystickPointerUp}
+                onPointerCancel={handleJoystickPointerUp}
+                className={`w-20 h-20 rounded-full border bg-dark-950/80 backdrop-blur-xl relative flex items-center justify-center touch-none transition-all shadow-2xl ${
+                  isJoystickActive 
+                    ? 'border-cyan-400/80 shadow-cyan-500/30 scale-105' 
+                    : 'border-slate-700/80 shadow-black/80'
+                }`}
+              >
+                {/* Subtle Directional Crosshair Guides */}
+                <div className="absolute inset-0 pointer-events-none flex items-center justify-center opacity-25">
+                  <div className="w-full h-px bg-slate-400" />
+                  <div className="absolute h-full w-px bg-slate-400" />
+                </div>
+
+                {/* Floating Joystick Thumb Knob */}
+                <div
+                  style={{
+                    transform: `translate(${joystickKnob.x}px, ${joystickKnob.y}px)`,
+                    transition: isJoystickActive ? 'none' : 'transform 0.15s cubic-bezier(0.2, 0, 0, 1)'
+                  }}
+                  className={`w-10 h-10 rounded-full flex items-center justify-center text-white shadow-lg pointer-events-none ${
+                    isJoystickActive
+                      ? 'bg-gradient-to-tr from-cyan-500 to-brand-500 ring-2 ring-cyan-300'
+                      : 'bg-gradient-to-tr from-slate-700 to-slate-600 ring-1 ring-slate-500'
+                  }`}
+                >
+                  <Move className="w-4 h-4 text-white drop-shadow" />
+                </div>
+              </div>
+              <span className="text-[10px] font-bold tracking-wider text-slate-400 uppercase font-mono drop-shadow">
+                Kaydır
+              </span>
+            </div>
+          )}
         </div>
       ) : (
         /* ========================================================================= */
