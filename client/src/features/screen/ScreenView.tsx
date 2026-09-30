@@ -17,8 +17,7 @@ import {
   ChevronDown,
   ChevronUp,
   RotateCw,
-  X,
-  Move
+  X
 } from 'lucide-react';
 
 export const ScreenView: React.FC = () => {
@@ -53,13 +52,11 @@ export const ScreenView: React.FC = () => {
   const [isPanMode, setIsPanMode] = useState<boolean>(false);
   const [pan, setPan] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
 
-  // Virtual Joystick state & refs
-  const [joystickKnob, setJoystickKnob] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
-  const [isJoystickActive, setIsJoystickActive] = useState<boolean>(false);
-  const joystickVectorRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
-  const joystickCenterRef = useRef<{ x: number; y: number } | null>(null);
-  const isJoystickActiveRef = useRef<boolean>(false);
-  const rafIdRef = useRef<number | null>(null);
+  // Pointer & Pinch tracking refs
+  const activePointersRef = useRef<Map<number, { x: number; y: number }>>(new Map());
+  const lastPanPosRef = useRef<{ x: number; y: number } | null>(null);
+  const initialPinchDistRef = useRef<number | null>(null);
+  const initialPinchZoomRef = useRef<number>(1.0);
 
   // Touch gesture state
   const touchStartRef = useRef<{ x: number; y: number; time: number } | null>(null);
@@ -208,109 +205,14 @@ export const ScreenView: React.FC = () => {
     prevStatusRef.current = connectionStatus;
   }, [connectionStatus, activePreset, startStream, requestSnapshot]);
 
-  // Smooth RAF Pan loop while virtual joystick is pushed
-  useEffect(() => {
-    if (!isJoystickActive || zoom <= 1.0) {
-      if (rafIdRef.current) {
-        cancelAnimationFrame(rafIdRef.current);
-        rafIdRef.current = null;
-      }
-      return;
-    }
-
-    let isRunning = true;
-    const animatePan = () => {
-      const { x: vx, y: vy } = joystickVectorRef.current;
-      if (Math.abs(vx) > 0.05 || Math.abs(vy) > 0.05) {
-        // Dynamic speed based on zoom level and joystick deflection
-        const baseSpeed = 14 * Math.sqrt(zoom);
-
-        // Calculate delta based on orientation
-        let deltaX = -vx * baseSpeed;
-        let deltaY = -vy * baseSpeed;
-
-        if (isRotated90) {
-          // In 90deg CW rotated view, adjust direction vectors
-          deltaX = vy * baseSpeed;
-          deltaY = -vx * baseSpeed;
-        }
-
-        setPan((prev) => {
-          const maxPanX = Math.round(((boxDims.width || 320) * (zoom - 1)) / 2);
-          const maxPanY = Math.round(((boxDims.height || 180) * (zoom - 1)) / 2);
-          return {
-            x: Math.max(-maxPanX, Math.min(maxPanX, prev.x + deltaX)),
-            y: Math.max(-maxPanY, Math.min(maxPanY, prev.y + deltaY))
-          };
-        });
-      }
-
-      if (isRunning) {
-        rafIdRef.current = requestAnimationFrame(animatePan);
-      }
+  // Pan Boundary Clamper
+  const clampPan = (newX: number, newY: number, curZoom: number) => {
+    const maxPanX = Math.max(0, Math.round(((boxDims.width || 320) * (curZoom - 1)) / 2));
+    const maxPanY = Math.max(0, Math.round(((boxDims.height || 180) * (curZoom - 1)) / 2));
+    return {
+      x: Math.max(-maxPanX, Math.min(maxPanX, newX)),
+      y: Math.max(-maxPanY, Math.min(maxPanY, newY))
     };
-
-    rafIdRef.current = requestAnimationFrame(animatePan);
-
-    return () => {
-      isRunning = false;
-      if (rafIdRef.current) cancelAnimationFrame(rafIdRef.current);
-    };
-  }, [isJoystickActive, zoom, isRotated90, boxDims.width, boxDims.height]);
-
-  const handleJoystickPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
-    e.stopPropagation();
-    const target = e.currentTarget;
-    const rect = target.getBoundingClientRect();
-    const centerX = rect.left + rect.width / 2;
-    const centerY = rect.top + rect.height / 2;
-    joystickCenterRef.current = { x: centerX, y: centerY };
-    try {
-      target.setPointerCapture(e.pointerId);
-    } catch {
-      // ignore
-    }
-
-    isJoystickActiveRef.current = true;
-    setIsJoystickActive(true);
-    vibrate(10);
-  };
-
-  const handleJoystickPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (!isJoystickActiveRef.current || !joystickCenterRef.current) return;
-    e.stopPropagation();
-
-    const dx = e.clientX - joystickCenterRef.current.x;
-    const dy = e.clientY - joystickCenterRef.current.y;
-    const dist = Math.hypot(dx, dy);
-    const maxRadius = 26; // px travel distance
-
-    let clampedX = dx;
-    let clampedY = dy;
-    if (dist > maxRadius) {
-      clampedX = (dx / dist) * maxRadius;
-      clampedY = (dy / dist) * maxRadius;
-    }
-
-    const normVx = clampedX / maxRadius;
-    const normVy = clampedY / maxRadius;
-
-    joystickVectorRef.current = { x: normVx, y: normVy };
-    setJoystickKnob({ x: clampedX, y: clampedY });
-  };
-
-  const handleJoystickPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
-    e.stopPropagation();
-    isJoystickActiveRef.current = false;
-    setIsJoystickActive(false);
-    joystickCenterRef.current = null;
-    joystickVectorRef.current = { x: 0, y: 0 };
-    setJoystickKnob({ x: 0, y: 0 });
-    try {
-      e.currentTarget.releasePointerCapture(e.pointerId);
-    } catch {
-      // ignore
-    }
   };
 
   // Normalized coordinate mapper respecting normal orientation, 90-degree software rotation, zoom and pan
@@ -354,8 +256,26 @@ export const ScreenView: React.FC = () => {
 
   // 3. Touch interaction handlers on the PC Screen
   const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (isPanMode) return;
+    activePointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
 
+    if (isPanMode) {
+      // Pan & Zoom Mode: Never send clicks to Windows
+      if (activePointersRef.current.size === 1) {
+        lastPanPosRef.current = { x: e.clientX, y: e.clientY };
+        try {
+          (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+        } catch {
+          // ignore
+        }
+      } else if (activePointersRef.current.size === 2) {
+        const pts = Array.from(activePointersRef.current.values());
+        initialPinchDistRef.current = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+        initialPinchZoomRef.current = zoom;
+      }
+      return;
+    }
+
+    // Click Mode (When Kaydır is OFF)
     const coords = getNormalizedCoords(e.clientX, e.clientY);
     if (!coords) return;
 
@@ -370,9 +290,37 @@ export const ScreenView: React.FC = () => {
   };
 
   const handlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (activePointersRef.current.has(e.pointerId)) {
+      activePointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    }
+
     if (isPanMode) {
-      if (e.buttons === 1) {
-        setPan((p) => ({ x: p.x + e.movementX, y: p.y + e.movementY }));
+      // Multi-touch: Pinch to Zoom
+      if (activePointersRef.current.size === 2) {
+        const pts = Array.from(activePointersRef.current.values());
+        const curDist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+        if (initialPinchDistRef.current && initialPinchDistRef.current > 0) {
+          const ratio = curDist / initialPinchDistRef.current;
+          const targetZoom = Math.max(1.0, Math.min(3.5, initialPinchZoomRef.current * ratio));
+          setZoom(Number(targetZoom.toFixed(2)));
+        }
+        return;
+      }
+
+      // Single-finger: Pan / Drag Screen
+      if (activePointersRef.current.size === 1 && lastPanPosRef.current) {
+        const dx = e.clientX - lastPanPosRef.current.x;
+        const dy = e.clientY - lastPanPosRef.current.y;
+        lastPanPosRef.current = { x: e.clientX, y: e.clientY };
+
+        let deltaX = dx;
+        let deltaY = dy;
+        if (isRotated90) {
+          deltaX = dy;
+          deltaY = -dx;
+        }
+
+        setPan((prev) => clampPan(prev.x + deltaX, prev.y + deltaY, zoom));
       }
       return;
     }
@@ -387,12 +335,31 @@ export const ScreenView: React.FC = () => {
   };
 
   const handlePointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    activePointersRef.current.delete(e.pointerId);
+
+    if (isPanMode) {
+      if (activePointersRef.current.size === 0) {
+        lastPanPosRef.current = null;
+        initialPinchDistRef.current = null;
+      } else if (activePointersRef.current.size === 1) {
+        const remaining = Array.from(activePointersRef.current.values())[0];
+        lastPanPosRef.current = { x: remaining.x, y: remaining.y };
+        initialPinchDistRef.current = null;
+      }
+      try {
+        (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
+      } catch {
+        // ignore
+      }
+      return;
+    }
+
     if (longPressTimerRef.current) {
       window.clearTimeout(longPressTimerRef.current);
       longPressTimerRef.current = null;
     }
 
-    if (isPanMode || !touchStartRef.current) return;
+    if (!touchStartRef.current) return;
 
     const coords = getNormalizedCoords(e.clientX, e.clientY);
     if (!coords) return;
@@ -417,6 +384,14 @@ export const ScreenView: React.FC = () => {
     }
 
     touchStartRef.current = null;
+  };
+
+  const handleWheel = (e: React.WheelEvent<HTMLDivElement>) => {
+    if (isPanMode || e.ctrlKey) {
+      e.preventDefault();
+      const delta = e.deltaY < 0 ? 0.25 : -0.25;
+      handleZoomChange(delta);
+    }
   };
 
   const toggleStream = () => {
@@ -449,13 +424,17 @@ export const ScreenView: React.FC = () => {
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
+      onPointerCancel={handlePointerUp}
+      onWheel={handleWheel}
       style={{
         width: `${boxDims.width}px`,
         height: `${boxDims.height}px`,
         transform: isRotated90 ? 'rotate(90deg)' : undefined,
         transformOrigin: 'center center'
       }}
-      className="relative shrink-0 select-none touch-none overflow-hidden cursor-crosshair transition-transform duration-200"
+      className={`relative shrink-0 select-none touch-none overflow-hidden transition-transform duration-200 ${
+        isPanMode ? 'cursor-grab active:cursor-grabbing' : 'cursor-crosshair'
+      }`}
     >
       {/* Zoom / Pan transformation container */}
       <div 
@@ -609,61 +588,14 @@ export const ScreenView: React.FC = () => {
               }}
               className={`h-12 px-3.5 rounded-xl border font-bold text-xs transition-all active:scale-95 select-none ${
                 isPanMode 
-                  ? 'bg-brand-500 text-white border-brand-400 shadow-md shadow-brand-500/25' 
+                  ? 'bg-brand-500 text-white border-brand-400 shadow-md shadow-brand-500/30 ring-2 ring-brand-400/40' 
                   : 'bg-slate-800 hover:bg-slate-700 text-slate-300 border-slate-700'
               }`}
-              title={isPanMode ? 'Pan Modu Aktif (Sürükle)' : 'Tıklama Modu'}
+              title={isPanMode ? 'Kaydırma Modu Açık (Sürükle & Yakınlaştır)' : 'Tıklama Modu (Windows Tıkla)'}
             >
-              Pan
+              {isPanMode ? 'Kaydır (Açık)' : 'Kaydır'}
             </button>
           </div>
-
-          {/* Virtual Mini-Joystick (Visible when Zoom > 1.0, positioned cleanly above bottom dock) */}
-          {zoom > 1.0 && (
-            <div
-              style={{
-                bottom: 'calc(env(safe-area-inset-bottom, 0px) + 84px)',
-                left: 'calc(env(safe-area-inset-left, 0px) + 16px)',
-              }}
-              className="absolute z-40 flex flex-col items-center gap-1 select-none animate-fadeIn"
-            >
-              <div
-                onPointerDown={handleJoystickPointerDown}
-                onPointerMove={handleJoystickPointerMove}
-                onPointerUp={handleJoystickPointerUp}
-                onPointerCancel={handleJoystickPointerUp}
-                className={`w-20 h-20 rounded-full border bg-dark-950/80 backdrop-blur-xl relative flex items-center justify-center touch-none transition-all shadow-2xl ${
-                  isJoystickActive 
-                    ? 'border-cyan-400/80 shadow-cyan-500/30 scale-105' 
-                    : 'border-slate-700/80 shadow-black/80'
-                }`}
-              >
-                {/* Directional Guides */}
-                <div className="absolute inset-0 pointer-events-none flex items-center justify-center opacity-25">
-                  <div className="w-full h-px bg-slate-400" />
-                  <div className="absolute h-full w-px bg-slate-400" />
-                </div>
-
-                {/* Floating Joystick Thumb Knob */}
-                <div
-                  style={{
-                    transform: `translate(${joystickKnob.x}px, ${joystickKnob.y}px)`,
-                    transition: isJoystickActive ? 'none' : 'transform 0.15s cubic-bezier(0.2, 0, 0, 1)'
-                  }}
-                  className={`w-10 h-10 rounded-full flex items-center justify-center text-white shadow-lg pointer-events-none ${
-                    isJoystickActive
-                      ? 'bg-gradient-to-tr from-cyan-500 to-brand-500 ring-2 ring-cyan-300'
-                      : 'bg-gradient-to-tr from-slate-700 to-slate-600 ring-1 ring-slate-500'
-                  }`}
-                >
-                  <Move className="w-4 h-4 text-white drop-shadow" />
-                </div>
-              </div>
-              <span className="text-[10px] font-bold tracking-wider text-slate-400 uppercase font-mono drop-shadow">
-                Kaydır
-              </span>
-            </div>
-          )}
         </div>
       ) : (
         /* ========================================================================= */
@@ -804,10 +736,10 @@ export const ScreenView: React.FC = () => {
                     ? 'bg-brand-500 text-white border-brand-400 shadow-md shadow-brand-500/25' 
                     : 'bg-dark-900 text-slate-400 border-slate-700 hover:text-white'
                 }`}
-                title={isPanMode ? 'Pan Modu Aktif (Sürükle)' : 'Tıklama Modu'}
+                title={isPanMode ? 'Kaydırma Modu Açık (Sürükle & Yakınlaştır)' : 'Tıklama Modu (Windows Tıkla)'}
               >
                 <Sliders className="w-3.5 h-3.5" />
-                <span>{isPanMode ? 'Kaydırılıyor' : 'Kaydır'}</span>
+                <span>{isPanMode ? 'Kaydır (Açık)' : 'Kaydır'}</span>
               </button>
             </div>
           </div>
