@@ -26,7 +26,7 @@ public class ScreenStreamCoordinator : IDisposable
         _captureEngine = captureEngine;
     }
 
-    public void StartStream(string connectionId, WebSocket socket, ScreenStartPayload config)
+    public void StartStream(string connectionId, Func<byte[], CancellationToken, Task<bool>> sendFrame, ScreenStartPayload config)
     {
         lock (_loopLock)
         {
@@ -39,7 +39,7 @@ public class ScreenStreamCoordinator : IDisposable
                 return;
             }
 
-            var session = new ClientStreamSession(connectionId, socket, config);
+            var session = new ClientStreamSession(connectionId, sendFrame, config);
             _sessions[connectionId] = session;
 
             _logger.LogInformation("Started screen stream for {ConnectionId}: FPS={Fps}, Q={Q}, Scale={Scale}, Monitor={Monitor}", 
@@ -171,7 +171,7 @@ public class ScreenStreamCoordinator : IDisposable
     {
         var sendSw = new Stopwatch();
 
-        while (!ct.IsCancellationRequested && session.Socket.State == WebSocketState.Open)
+        while (!ct.IsCancellationRequested)
         {
             try
             {
@@ -182,13 +182,13 @@ public class ScreenStreamCoordinator : IDisposable
                 if (packet == null) continue;
 
                 sendSw.Restart();
-                await session.Socket.SendAsync(
-                    new ArraySegment<byte>(packet),
-                    WebSocketMessageType.Binary,
-                    true,
-                    ct
-                );
+                bool sent = await session.SendFrameAsync(packet, ct);
                 sendSw.Stop();
+
+                if (!sent)
+                {
+                    break;
+                }
 
                 session.RecordSent(packet.Length, sendSw.ElapsedMilliseconds);
             }
@@ -230,7 +230,7 @@ public class ScreenStreamCoordinator : IDisposable
 public class ClientStreamSession : IDisposable
 {
     public string ConnectionId { get; }
-    public WebSocket Socket { get; }
+    public Func<byte[], CancellationToken, Task<bool>> SendFrameAsync { get; }
     public ScreenStartPayload Config { get; private set; }
     public CancellationTokenSource Cts { get; } = new();
     public SemaphoreSlim Signal { get; } = new(0, 1);
@@ -245,10 +245,10 @@ public class ClientStreamSession : IDisposable
     private long _lastCaptureDurationMs;
     private long _lastSendDurationMs;
 
-    public ClientStreamSession(string connectionId, WebSocket socket, ScreenStartPayload config)
+    public ClientStreamSession(string connectionId, Func<byte[], CancellationToken, Task<bool>> sendFrame, ScreenStartPayload config)
     {
         ConnectionId = connectionId;
-        Socket = socket;
+        SendFrameAsync = sendFrame;
         Config = config;
     }
 

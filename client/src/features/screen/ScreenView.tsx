@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { useScreenStore, ScreenPreset } from '../../stores/screenStore';
+import { useConnectionStore } from '../../stores/connectionStore';
 import { wsClient } from '../../protocol/wsClient';
 import { decodeBinaryFrame } from './screenDecoder';
 import { 
@@ -189,6 +190,20 @@ export const ScreenView: React.FC = () => {
       if (longPressTimerRef.current) window.clearTimeout(longPressTimerRef.current);
     };
   }, [handleBinaryFrame, startStream, stopStream, requestSnapshot, activePreset]);
+
+  // Re-start screen streaming automatically if connection drops and reconnects
+  const connectionStatus = useConnectionStore((s) => s.status);
+  const prevStatusRef = useRef(connectionStatus);
+  useEffect(() => {
+    if (prevStatusRef.current !== 'connected' && connectionStatus === 'connected') {
+      if (activePreset !== 'snapshot') {
+        startStream();
+      } else {
+        requestSnapshot();
+      }
+    }
+    prevStatusRef.current = connectionStatus;
+  }, [connectionStatus, activePreset, startStream, requestSnapshot]);
 
   // Normalized coordinate mapper respecting normal orientation and 90-degree software rotation
   const getNormalizedCoords = (clientX: number, clientY: number) => {

@@ -18,6 +18,8 @@ class WebSocketClient {
   private readonly MAX_RECONNECT_DELAY = 10000;
   private readonly HEARTBEAT_INTERVAL = 3000;
 
+  private lastPongTime = Date.now();
+
   constructor() {
     // Handle iOS Safari visibility change (instant reconnect on app resume)
     if (typeof document !== 'undefined') {
@@ -26,6 +28,13 @@ class WebSocketClient {
           if (!this.isConnected() && !this.isManuallyClosed) {
             useConnectionStore.getState().addLog('info', 'App resumed into foreground. Reconnecting...');
             this.reconnectImmediate();
+          } else if (this.isConnected()) {
+            if (Date.now() - this.lastPongTime > 6000) {
+              useConnectionStore.getState().addLog('info', 'Stale connection detected upon resume. Refreshing...');
+              this.reconnectImmediate();
+            } else {
+              this.send('heartbeat', 'system.ping', { clientTime: Date.now() });
+            }
           }
         }
       });
@@ -121,6 +130,7 @@ class WebSocketClient {
     store.resetReconnectAttempts();
     store.addLog('success', 'Connected to Windows Agent!');
 
+    this.lastPongTime = Date.now();
     this.startHeartbeat();
   }
 
@@ -143,6 +153,7 @@ class WebSocketClient {
       } else if (envelope.action === 'system.pong') {
         const pong = envelope.payload as PongPayload;
         const now = Date.now();
+        this.lastPongTime = now;
         const rtt = Math.max(0, now - pong.clientTime);
         useConnectionStore.getState().setLatency(rtt);
         useConnectionStore.getState().setLastHeartbeat(now);
@@ -182,12 +193,20 @@ class WebSocketClient {
 
   private handleError(_event: Event) {
     useConnectionStore.getState().addLog('error', 'WebSocket network error occurred.');
+    if (!this.isConnected() && !this.isManuallyClosed) {
+      this.scheduleReconnect();
+    }
   }
 
   private startHeartbeat() {
     this.stopHeartbeat();
     this.heartbeatTimer = window.setInterval(() => {
       if (this.isConnected()) {
+        if (Date.now() - this.lastPongTime > 9000) {
+          useConnectionStore.getState().addLog('warn', 'Heartbeat timeout: Server unresponsive >9s. Reconnecting...');
+          this.reconnectImmediate();
+          return;
+        }
         this.send('heartbeat', 'system.ping', { clientTime: Date.now() });
       }
     }, this.HEARTBEAT_INTERVAL);
@@ -227,6 +246,7 @@ class WebSocketClient {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
+    this.cleanup();
     this.connect();
   }
 

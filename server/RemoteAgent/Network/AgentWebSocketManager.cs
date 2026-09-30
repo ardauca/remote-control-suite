@@ -24,7 +24,7 @@ public class AgentWebSocketManager
     private readonly Platform.SystemControl.ISystemControlManager _systemControlManager;
     private readonly Platform.Screen.ScreenStreamCoordinator _screenCoordinator;
     private readonly Platform.Screen.IScreenCaptureEngine _screenCaptureEngine;
-    private readonly ConcurrentDictionary<string, WebSocket> _activeSockets = new();
+    private readonly ConcurrentDictionary<string, ActiveConnection> _connections = new();
     private readonly ConcurrentDictionary<string, bool> _authenticatedConnections = new();
     private readonly JsonSerializerOptions _jsonOptions = new()
     {
@@ -76,24 +76,25 @@ public class AgentWebSocketManager
         // Send screen telemetry updates to active streaming clients
         _screenCoordinator.TelemetryUpdated += (connId, telemetry) =>
         {
-            if (_activeSockets.TryGetValue(connId, out var sock) && sock.State == WebSocketState.Open)
+            if (_connections.TryGetValue(connId, out var conn) && conn.Socket.State == WebSocketState.Open)
             {
                 var envelope = MessageEnvelope<ScreenTelemetryPayload>.Create("event", ActionTypes.ScreenTelemetry, telemetry);
-                _ = SendJsonAsync(sock, envelope, CancellationToken.None);
+                _ = SendJsonAsync(conn, envelope, CancellationToken.None);
             }
         };
     }
 
-    public int ActiveConnectionCount => _activeSockets.Count;
+    public int ActiveConnectionCount => _connections.Count;
 
     public async Task HandleConnectionAsync(HttpContext context, WebSocket webSocket)
     {
         var connectionId = Guid.NewGuid().ToString("N");
         var clientIp = context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+        var activeConn = new ActiveConnection(connectionId, webSocket);
 
-        _activeSockets.TryAdd(connectionId, webSocket);
+        _connections.TryAdd(connectionId, activeConn);
         _logger.LogInformation("WebSocket client connected. ID: {ConnectionId}, IP: {ClientIp}", connectionId, clientIp);
-        ActiveConnectionsChanged?.Invoke(_activeSockets.Count);
+        ActiveConnectionsChanged?.Invoke(_connections.Count);
 
         bool isAuth = string.IsNullOrEmpty(_options.AuthToken) ||
                       (context.Request.Query.TryGetValue("token", out var tokenVal) && tokenVal.ToString() == _options.AuthToken);
@@ -110,19 +111,19 @@ public class AgentWebSocketManager
                 Capabilities = SystemInfoHelper.GetCapabilities()
             };
             var helloEnvelope = MessageEnvelope<ServerHelloPayload>.Create("event", ActionTypes.SystemHello, helloPayload);
-            await SendJsonAsync(webSocket, helloEnvelope, CancellationToken.None);
+            await SendJsonAsync(activeConn, helloEnvelope, CancellationToken.None);
 
             // 2. Send initial volume and media states
             var initialVol = _audioManager.GetVolumeState();
-            await SendJsonAsync(webSocket, MessageEnvelope<VolumeStatePayload>.Create("event", ActionTypes.VolumeState, initialVol), CancellationToken.None);
+            await SendJsonAsync(activeConn, MessageEnvelope<VolumeStatePayload>.Create("event", ActionTypes.VolumeState, initialVol), CancellationToken.None);
 
             var initialMedia = await _mediaManager.GetNowPlayingAsync();
-            await SendJsonAsync(webSocket, MessageEnvelope<MediaNowPlayingPayload>.Create("event", ActionTypes.MediaNowPlaying, initialMedia), CancellationToken.None);
+            await SendJsonAsync(activeConn, MessageEnvelope<MediaNowPlayingPayload>.Create("event", ActionTypes.MediaNowPlaying, initialMedia), CancellationToken.None);
 
             var initialPower = _systemControlManager.GetCurrentPowerStatus();
-            await SendJsonAsync(webSocket, MessageEnvelope<PowerStatusPayload>.Create("event", ActionTypes.PowerStatus, initialPower), CancellationToken.None);
+            await SendJsonAsync(activeConn, MessageEnvelope<PowerStatusPayload>.Create("event", ActionTypes.PowerStatus, initialPower), CancellationToken.None);
 
-            // 2. Read loop
+            // 3. Read loop
             var buffer = new byte[1024 * 16]; // 16 KB buffer
             while (webSocket.State == WebSocketState.Open)
             {
@@ -136,10 +137,17 @@ public class AgentWebSocketManager
                         break;
                     }
                     ms.Write(buffer, 0, result.Count);
+
+                    // Safety ceiling: prevent unbounded memory consumption if oversized packet arrives
+                    if (ms.Length > 1024 * 1024)
+                    {
+                        _logger.LogWarning("Incoming message exceeded 1MB limit from {ConnectionId}, closing", connectionId);
+                        break;
+                    }
                 }
                 while (!result.EndOfMessage);
 
-                if (result.MessageType == WebSocketMessageType.Close)
+                if (result.MessageType == WebSocketMessageType.Close || ms.Length > 1024 * 1024)
                 {
                     _logger.LogInformation("Client requested close. ID: {ConnectionId}", connectionId);
                     await webSocket.CloseAsync(WebSocketCloseStatus.NormalClosure, "Closing", CancellationToken.None);
@@ -151,7 +159,7 @@ public class AgentWebSocketManager
                     ms.Seek(0, SeekOrigin.Begin);
                     using var reader = new StreamReader(ms, Encoding.UTF8);
                     var messageJson = await reader.ReadToEndAsync();
-                    await ProcessMessageAsync(webSocket, connectionId, messageJson);
+                    await ProcessMessageAsync(activeConn, messageJson);
                 }
             }
         }
@@ -165,16 +173,16 @@ public class AgentWebSocketManager
         }
         finally
         {
-            _activeSockets.TryRemove(connectionId, out _);
+            _connections.TryRemove(connectionId, out _);
             _authenticatedConnections.TryRemove(connectionId, out _);
             _screenCoordinator.StopStream(connectionId);
             _inputSimulator.ReleaseConnectionKeys(connectionId);
-            if (_activeSockets.IsEmpty)
+            if (_connections.IsEmpty)
             {
                 _inputSimulator.ReleaseAllKeys();
             }
-            _logger.LogInformation("WebSocket client removed. ID: {ConnectionId}. Remaining: {Count}", connectionId, _activeSockets.Count);
-            ActiveConnectionsChanged?.Invoke(_activeSockets.Count);
+            _logger.LogInformation("WebSocket client removed. ID: {ConnectionId}. Remaining: {Count}", connectionId, _connections.Count);
+            ActiveConnectionsChanged?.Invoke(_connections.Count);
 
             if (webSocket.State == WebSocketState.Open || webSocket.State == WebSocketState.CloseReceived)
             {
@@ -187,12 +195,14 @@ public class AgentWebSocketManager
                     // Ignore during cleanup
                 }
             }
+            activeConn.Dispose();
             webSocket.Dispose();
         }
     }
 
-    private async Task ProcessMessageAsync(WebSocket webSocket, string connectionId, string rawJson)
+    private async Task ProcessMessageAsync(ActiveConnection conn, string rawJson)
     {
+        var connectionId = conn.ConnectionId;
         try
         {
             using var doc = JsonDocument.Parse(rawJson);
@@ -221,7 +231,7 @@ public class AgentWebSocketManager
                         ServerTime = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
                     };
                     var pongEnvelope = MessageEnvelope<PongPayload>.Create("heartbeat", ActionTypes.SystemPong, pong);
-                    await SendJsonAsync(webSocket, pongEnvelope, CancellationToken.None);
+                    await SendJsonAsync(conn, pongEnvelope, CancellationToken.None);
                     break;
 
                 case ActionTypes.MouseMove:
@@ -279,7 +289,7 @@ public class AgentWebSocketManager
                             {
                                 _logger.LogWarning("Oversized text payload ({Length} chars) rejected from {ConnectionId}", text.Length, connectionId);
                                 var err = new ErrorPayload { Code = "PAYLOAD_TOO_LARGE", Message = "Text payload exceeds 2000 characters limit" };
-                                await SendJsonAsync(webSocket, MessageEnvelope<ErrorPayload>.Create("response", ActionTypes.SystemError, err), CancellationToken.None);
+                                await SendJsonAsync(conn, MessageEnvelope<ErrorPayload>.Create("response", ActionTypes.SystemError, err), CancellationToken.None);
                                 return;
                             }
                             _inputSimulator.SendText(text);
@@ -298,7 +308,7 @@ public class AgentWebSocketManager
                             {
                                 _logger.LogWarning("Invalid or unmapped key '{Key}' rejected for KeyDown from {ConnectionId}", key, connectionId);
                                 var err = new ErrorPayload { Code = "INVALID_KEY", Message = $"Key '{key}' is not mapped or recognized" };
-                                await SendJsonAsync(webSocket, MessageEnvelope<ErrorPayload>.Create("response", ActionTypes.SystemError, err), CancellationToken.None);
+                                await SendJsonAsync(conn, MessageEnvelope<ErrorPayload>.Create("response", ActionTypes.SystemError, err), CancellationToken.None);
                                 return;
                             }
                             _inputSimulator.KeyDown(key, connectionId);
@@ -334,7 +344,7 @@ public class AgentWebSocketManager
                         {
                             _logger.LogWarning("Shortcut keys count exceeded ({Count} keys) from {ConnectionId}", keys.Count, connectionId);
                             var err = new ErrorPayload { Code = "INVALID_SHORTCUT", Message = "Shortcut exceeds 8 keys limit" };
-                            await SendJsonAsync(webSocket, MessageEnvelope<ErrorPayload>.Create("response", ActionTypes.SystemError, err), CancellationToken.None);
+                            await SendJsonAsync(conn, MessageEnvelope<ErrorPayload>.Create("response", ActionTypes.SystemError, err), CancellationToken.None);
                             return;
                         }
 
@@ -342,7 +352,7 @@ public class AgentWebSocketManager
                         {
                             _logger.LogWarning("Shortcut contains unrecognized key from {ConnectionId}", connectionId);
                             var err = new ErrorPayload { Code = "INVALID_KEY", Message = "Shortcut contains unmapped key" };
-                            await SendJsonAsync(webSocket, MessageEnvelope<ErrorPayload>.Create("response", ActionTypes.SystemError, err), CancellationToken.None);
+                            await SendJsonAsync(conn, MessageEnvelope<ErrorPayload>.Create("response", ActionTypes.SystemError, err), CancellationToken.None);
                             return;
                         }
 
@@ -360,7 +370,7 @@ public class AgentWebSocketManager
                 // Volume & Audio Mixer (Phase 5)
                 case ActionTypes.VolumeRequestState:
                     var currentVolState = _audioManager.GetVolumeState();
-                    await SendJsonAsync(webSocket, MessageEnvelope<VolumeStatePayload>.Create("event", ActionTypes.VolumeState, currentVolState), CancellationToken.None);
+                    await SendJsonAsync(conn, MessageEnvelope<VolumeStatePayload>.Create("event", ActionTypes.VolumeState, currentVolState), CancellationToken.None);
                     break;
 
                 case ActionTypes.VolumeSetMaster:
@@ -395,7 +405,7 @@ public class AgentWebSocketManager
                 // Media Control (Phase 5)
                 case ActionTypes.MediaRequestNowPlaying:
                     var nowPlaying = await _mediaManager.GetNowPlayingAsync();
-                    await SendJsonAsync(webSocket, MessageEnvelope<MediaNowPlayingPayload>.Create("event", ActionTypes.MediaNowPlaying, nowPlaying), CancellationToken.None);
+                    await SendJsonAsync(conn, MessageEnvelope<MediaNowPlayingPayload>.Create("event", ActionTypes.MediaNowPlaying, nowPlaying), CancellationToken.None);
                     break;
 
                 case ActionTypes.MediaAction:
@@ -413,7 +423,7 @@ public class AgentWebSocketManager
                 // Power & System Controls (Phase 6)
                 case ActionTypes.PowerRequestStatus:
                     var powerStatus = _systemControlManager.GetCurrentPowerStatus();
-                    await SendJsonAsync(webSocket, MessageEnvelope<PowerStatusPayload>.Create("event", ActionTypes.PowerStatus, powerStatus), CancellationToken.None);
+                    await SendJsonAsync(conn, MessageEnvelope<PowerStatusPayload>.Create("event", ActionTypes.PowerStatus, powerStatus), CancellationToken.None);
                     break;
 
                 case ActionTypes.PowerAction:
@@ -476,7 +486,7 @@ public class AgentWebSocketManager
                     break;
 
                 case ActionTypes.PowerCancel:
-                    if (!IsAuthorized(connectionId)) { await SendUnauthorizedAsync(webSocket); return; }
+                    if (!IsAuthorized(connectionId)) { await SendUnauthorizedAsync(conn); return; }
                     _systemControlManager.CancelScheduledShutdown();
                     break;
 
@@ -493,13 +503,13 @@ public class AgentWebSocketManager
                             Authenticated = ok,
                             Message = ok ? "Authentication successful" : "Invalid auth token"
                         };
-                        await SendJsonAsync(webSocket, MessageEnvelope<AuthResultPayload>.Create("response", ActionTypes.AuthResult, res), CancellationToken.None);
+                        await SendJsonAsync(conn, MessageEnvelope<AuthResultPayload>.Create("response", ActionTypes.AuthResult, res), CancellationToken.None);
                     }
                     break;
 
                 // Screen Mirroring & Stream (Phase 7)
                 case ActionTypes.ScreenStart:
-                    if (!IsAuthorized(connectionId)) { await SendUnauthorizedAsync(webSocket); return; }
+                    if (!IsAuthorized(connectionId)) { await SendUnauthorizedAsync(conn); return; }
                     var cfg = new ScreenStartPayload();
                     if (root.TryGetProperty("payload", out var sStartPayload))
                     {
@@ -508,7 +518,7 @@ public class AgentWebSocketManager
                         if (sStartPayload.TryGetProperty("scale", out var scP)) cfg.Scale = (float)scP.GetDouble();
                         if (sStartPayload.TryGetProperty("monitorIndex", out var monP)) cfg.MonitorIndex = monP.GetInt32();
                     }
-                    _screenCoordinator.StartStream(connectionId, webSocket, cfg);
+                    _screenCoordinator.StartStream(connectionId, (packet, ct) => conn.SendAsync(new ArraySegment<byte>(packet), WebSocketMessageType.Binary, true, ct), cfg);
                     break;
 
                 case ActionTypes.ScreenStop:
@@ -516,7 +526,7 @@ public class AgentWebSocketManager
                     break;
 
                 case ActionTypes.ScreenSnapshot:
-                    if (!IsAuthorized(connectionId)) { await SendUnauthorizedAsync(webSocket); return; }
+                    if (!IsAuthorized(connectionId)) { await SendUnauthorizedAsync(conn); return; }
                     int monIdx = 0;
                     float snapScale = 1.0f;
                     int snapQuality = 85;
@@ -530,12 +540,12 @@ public class AgentWebSocketManager
                     if (snapFrame != null)
                     {
                         var packet = Platform.Screen.BinaryFrameHeader.Pack(snapFrame);
-                        await webSocket.SendAsync(new ArraySegment<byte>(packet), WebSocketMessageType.Binary, true, CancellationToken.None);
+                        await conn.SendAsync(new ArraySegment<byte>(packet), WebSocketMessageType.Binary, true, CancellationToken.None);
                     }
                     break;
 
                 case ActionTypes.ScreenTouch:
-                    if (!IsAuthorized(connectionId)) { await SendUnauthorizedAsync(webSocket); return; }
+                    if (!IsAuthorized(connectionId)) { await SendUnauthorizedAsync(conn); return; }
                     if (root.TryGetProperty("payload", out var touchPayload))
                     {
                         float normX = touchPayload.TryGetProperty("normX", out var nxP) ? (float)nxP.GetDouble() : 0.5f;
@@ -579,7 +589,7 @@ public class AgentWebSocketManager
 
                 case ActionTypes.ScreenMonitors:
                     var monitors = _screenCaptureEngine.GetMonitors();
-                    await SendJsonAsync(webSocket, MessageEnvelope<List<Platform.Screen.ScreenMonitorInfo>>.Create("response", ActionTypes.ScreenMonitors, monitors), CancellationToken.None);
+                    await SendJsonAsync(conn, MessageEnvelope<List<Platform.Screen.ScreenMonitorInfo>>.Create("response", ActionTypes.ScreenMonitors, monitors), CancellationToken.None);
                     break;
 
                 default:
@@ -596,27 +606,27 @@ public class AgentWebSocketManager
                 Message = "Malformed JSON message"
             };
             var errEnvelope = MessageEnvelope<ErrorPayload>.Create("response", ActionTypes.SystemError, err);
-            await SendJsonAsync(webSocket, errEnvelope, CancellationToken.None);
+            await SendJsonAsync(conn, errEnvelope, CancellationToken.None);
         }
     }
 
-    public async Task SendJsonAsync<T>(WebSocket socket, MessageEnvelope<T> envelope, CancellationToken cancellationToken)
+    public async Task<bool> SendJsonAsync<T>(ActiveConnection conn, MessageEnvelope<T> envelope, CancellationToken cancellationToken = default)
     {
-        if (socket.State != WebSocketState.Open)
+        if (conn.Socket.State != WebSocketState.Open)
         {
-            return;
+            return false;
         }
 
         var json = JsonSerializer.Serialize(envelope, _jsonOptions);
         var bytes = Encoding.UTF8.GetBytes(json);
-        await socket.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, cancellationToken);
+        return await conn.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, cancellationToken);
     }
 
     public async Task BroadcastAsync<T>(MessageEnvelope<T> envelope, CancellationToken cancellationToken = default)
     {
-        var tasks = _activeSockets.Values
-            .Where(s => s.State == WebSocketState.Open)
-            .Select(s => SendJsonAsync(s, envelope, cancellationToken));
+        var tasks = _connections.Values
+            .Where(c => c.Socket.State == WebSocketState.Open)
+            .Select(c => SendJsonAsync(c, envelope, cancellationToken));
         await Task.WhenAll(tasks);
     }
 
@@ -626,13 +636,68 @@ public class AgentWebSocketManager
         return _authenticatedConnections.TryGetValue(connectionId, out var auth) && auth;
     }
 
-    private Task SendUnauthorizedAsync(WebSocket socket)
+    private Task<bool> SendUnauthorizedAsync(ActiveConnection conn)
     {
         var err = new ErrorPayload
         {
             Code = "UNAUTHORIZED",
             Message = "Authentication required for this operation"
         };
-        return SendJsonAsync(socket, MessageEnvelope<ErrorPayload>.Create("response", ActionTypes.SystemError, err), CancellationToken.None);
+        return SendJsonAsync(conn, MessageEnvelope<ErrorPayload>.Create("response", ActionTypes.SystemError, err), CancellationToken.None);
+    }
+}
+
+public sealed class ActiveConnection : IDisposable
+{
+    public string ConnectionId { get; }
+    public WebSocket Socket { get; }
+    public SemaphoreSlim SendLock { get; } = new(1, 1);
+
+    public ActiveConnection(string connectionId, WebSocket socket)
+    {
+        ConnectionId = connectionId;
+        Socket = socket;
+    }
+
+    public async Task<bool> SendAsync(ArraySegment<byte> buffer, WebSocketMessageType messageType, bool endOfMessage, CancellationToken ct)
+    {
+        if (Socket.State != WebSocketState.Open)
+        {
+            return false;
+        }
+
+        bool lockAcquired = false;
+        try
+        {
+            lockAcquired = await SendLock.WaitAsync(TimeSpan.FromSeconds(5), ct);
+            if (!lockAcquired)
+            {
+                return false;
+            }
+
+            if (Socket.State != WebSocketState.Open)
+            {
+                return false;
+            }
+
+            await Socket.SendAsync(buffer, messageType, endOfMessage, ct);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+        finally
+        {
+            if (lockAcquired)
+            {
+                try { SendLock.Release(); } catch { }
+            }
+        }
+    }
+
+    public void Dispose()
+    {
+        SendLock.Dispose();
     }
 }
