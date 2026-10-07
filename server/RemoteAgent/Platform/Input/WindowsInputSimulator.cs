@@ -114,11 +114,25 @@ public class WindowsInputSimulator : IInputSimulator
 
     public void MoveMouseRelative(int dx, int dy)
     {
-        if (NativeMethods.GetCursorPos(out var pt))
+        if (dx == 0 && dy == 0) return;
+
+        var input = new NativeMethods.INPUT
         {
-            NativeMethods.SetCursorPos(pt.X + dx, pt.Y + dy);
-        }
-        NativeMethods.mouse_event((uint)NativeMethods.MouseEventFlags.MOVE, dx, dy, 0, UIntPtr.Zero);
+            type = NativeMethods.INPUT_MOUSE,
+            u = new NativeMethods.InputUnion
+            {
+                mi = new NativeMethods.MOUSEINPUT
+                {
+                    dx = dx,
+                    dy = dy,
+                    dwFlags = (uint)NativeMethods.MouseEventFlags.MOVE,
+                    mouseData = 0,
+                    time = 0,
+                    dwExtraInfo = UIntPtr.Zero
+                }
+            }
+        };
+        NativeMethods.SendInput(1, new[] { input }, InputSize);
     }
 
     public void MoveMouseAbsolute(int x, int y)

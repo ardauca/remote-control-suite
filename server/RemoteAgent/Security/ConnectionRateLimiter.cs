@@ -44,8 +44,8 @@ public class ConnectionRateLimiter
     }
 
     // Different buckets for different operation tiers:
-    // Tier 1: Mouse movement (high frequency, burst 120, refill 120/sec)
-    private readonly TokenBucket _moveBucket = new(capacity: 120, refillPerSecond: 120);
+    // Tier 1: Mouse movement (high frequency, burst 360, refill 360/sec for ProMotion 120Hz displays)
+    private readonly TokenBucket _moveBucket = new(capacity: 360, refillPerSecond: 360);
 
     // Tier 2: Clicks and keyboard key down/up (burst 60, refill 40/sec)
     private readonly TokenBucket _inputEventBucket = new(capacity: 60, refillPerSecond: 40);
@@ -67,7 +67,7 @@ public class ConnectionRateLimiter
         {
             if (!_moveBucket.TryConsume())
             {
-                reason = "Mouse movement rate limit exceeded (max 120/s)";
+                reason = "Mouse movement rate limit exceeded (max 360/s)";
                 return false;
             }
             return true;

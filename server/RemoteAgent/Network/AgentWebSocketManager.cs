@@ -169,39 +169,49 @@ public class AgentWebSocketManager
             var buffer = new byte[1024 * 16]; // 16 KB buffer
             while (webSocket.State == WebSocketState.Open)
             {
-                using var ms = new MemoryStream();
-                WebSocketReceiveResult result;
-                do
-                {
-                    result = await webSocket.ReceiveAsync(new ArraySegment<byte>(buffer), CancellationToken.None);
-                    if (result.MessageType == WebSocketMessageType.Close)
-                    {
-                        break;
-                    }
-                    ms.Write(buffer, 0, result.Count);
-
-                    // Safety ceiling: prevent unbounded memory consumption if oversized packet arrives
-                    if (ms.Length > 1024 * 1024)
-                    {
-                        _logger.LogWarning("Incoming message exceeded 1MB limit from {ConnectionId}, closing", connectionId);
-                        break;
-                    }
-                }
-                while (!result.EndOfMessage);
-
-                if (result.MessageType == WebSocketMessageType.Close || ms.Length > 1024 * 1024)
+                var receiveResult = await webSocket.ReceiveAsync(new ArraySegment<byte>(buffer), CancellationToken.None);
+                if (receiveResult.MessageType == WebSocketMessageType.Close)
                 {
                     _logger.LogInformation("Client requested close. ID: {ConnectionId}", connectionId);
                     await webSocket.CloseAsync(WebSocketCloseStatus.NormalClosure, "Closing", CancellationToken.None);
                     break;
                 }
 
-                if (result.MessageType == WebSocketMessageType.Text)
+                if (receiveResult.MessageType == WebSocketMessageType.Text)
                 {
-                    ms.Seek(0, SeekOrigin.Begin);
-                    using var reader = new StreamReader(ms, Encoding.UTF8);
-                    var messageJson = await reader.ReadToEndAsync();
-                    await ProcessMessageAsync(activeConn, session, messageJson);
+                    if (receiveResult.EndOfMessage)
+                    {
+                        // Fast zero-allocation path for standard messages (mouse moves, clicks, keyboard)
+                        await ProcessMessageAsync(activeConn, session, buffer.AsMemory(0, receiveResult.Count));
+                    }
+                    else
+                    {
+                        // Multi-fragment large message fallback
+                        using var ms = new MemoryStream();
+                        ms.Write(buffer, 0, receiveResult.Count);
+                        WebSocketReceiveResult contResult;
+                        do
+                        {
+                            contResult = await webSocket.ReceiveAsync(new ArraySegment<byte>(buffer), CancellationToken.None);
+                            if (contResult.MessageType == WebSocketMessageType.Close) break;
+                            ms.Write(buffer, 0, contResult.Count);
+                            if (ms.Length > 1024 * 1024)
+                            {
+                                _logger.LogWarning("Incoming message exceeded 1MB limit from {ConnectionId}, closing", connectionId);
+                                break;
+                            }
+                        }
+                        while (!contResult.EndOfMessage);
+
+                        if (contResult.MessageType == WebSocketMessageType.Close || ms.Length > 1024 * 1024)
+                        {
+                            _logger.LogInformation("Client requested close or exceeded limit. ID: {ConnectionId}", connectionId);
+                            await webSocket.CloseAsync(WebSocketCloseStatus.NormalClosure, "Closing", CancellationToken.None);
+                            break;
+                        }
+
+                        await ProcessMessageAsync(activeConn, session, ms.ToArray());
+                    }
                 }
             }
         }
@@ -261,12 +271,12 @@ public class AgentWebSocketManager
         }
     }
 
-    private async Task ProcessMessageAsync(ActiveConnection conn, ClientSessionInfo session, string rawJson)
+    private async Task ProcessMessageAsync(ActiveConnection conn, ClientSessionInfo session, ReadOnlyMemory<byte> rawJsonBytes)
     {
         var connectionId = conn.ConnectionId;
         try
         {
-            using var doc = JsonDocument.Parse(rawJson);
+            using var doc = JsonDocument.Parse(rawJsonBytes);
             var root = doc.RootElement;
 
             // 1. Protocol Version Validation

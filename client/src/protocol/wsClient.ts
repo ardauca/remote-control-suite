@@ -113,6 +113,8 @@ class WebSocketClient {
     return this.socket !== null && this.socket.readyState === WebSocket.OPEN;
   }
 
+  private fastMsgSeq = 0;
+
   public send<T>(type: 'command' | 'event' | 'response' | 'heartbeat', action: string, payload: T) {
     if (!this.isConnected()) {
       useConnectionStore.getState().addLog('warn', `Cannot send ${action}: Not connected`);
@@ -121,7 +123,7 @@ class WebSocketClient {
 
     const envelope: MessageEnvelope<T> = {
       version: 1,
-      id: generateUUID(),
+      id: action === 'mouse.move' || action === 'mouse.scroll' ? `m-${++this.fastMsgSeq}` : generateUUID(),
       type,
       action,
       payload,
