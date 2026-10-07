@@ -34,6 +34,9 @@ public static class Program
 
     private static int RunApp(string[] args)
     {
+        bool startInTray = args.Any(a => string.Equals(a, "--tray", StringComparison.OrdinalIgnoreCase) ||
+                                         string.Equals(a, "-tray", StringComparison.OrdinalIgnoreCase));
+
         var builder = WebApplication.CreateBuilder(args);
 
         // 1. Configuration
@@ -266,7 +269,7 @@ public static class Program
         // 7. Initialize Windows Forms Application & Dashboard
         ApplicationConfiguration.Initialize();
         var pairingManager = app.Services.GetRequiredService<Security.PairingManager>();
-        var mainForm = new MainDashboardForm(optionsSnapshot, wsManager, pairingManager, appLifetime);
+        var mainForm = new MainDashboardForm(optionsSnapshot, wsManager, pairingManager, appLifetime, startInTray);
 
         // Start Kestrel web host synchronously before opening UI
         try

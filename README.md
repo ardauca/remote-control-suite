@@ -105,8 +105,11 @@ Rather than unverified marketing claims like "zero latency", this project benchm
 ## ⚡ Quick Start
 
 ### 1. Run on Windows
-1. Double-click `Remote Control.lnk` or run `start-agent.bat`.
-2. The agent dashboard will open and display your local IP and a 6-digit **Pairing PIN**.
+1. Double-click `publish\RemoteAgent.exe` (or your desktop shortcut).
+2. The agent runs as a clean, native Windows application without any CMD/console windows.
+3. Closing the dashboard with **X** minimizes it directly to the **System Tray**, keeping Kestrel and your iPhone connection alive.
+4. If **"Start with Windows"** is enabled, Remote Agent starts silently in the System Tray on PC boot (`--tray`), ready for instant connection.
+5. To reopen the dashboard, double-click the system tray icon or right-click → **Open Dashboard**. To quit completely, choose **Exit**.
 
 ### 2. Connect from iPhone
 1. Ensure your iPhone is connected to the same Wi-Fi network.
