@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { wsClient } from './protocol/wsClient';
 import { useConnectionStore } from './stores/connectionStore';
 import { ConnectionStatusCard } from './features/status/ConnectionStatusCard';
+import { PairingModal } from './features/status/PairingModal';
 import { NavigationBar, TabType } from './features/navigation/NavigationBar';
 import { TouchpadView } from './features/touchpad/TouchpadView';
 import { ScreenView } from './features/screen/ScreenView';
@@ -9,12 +10,14 @@ import { MediaControlView } from './features/media/MediaControlView';
 import { PowerSystemView } from './features/power/PowerSystemView';
 import { 
   Smartphone,
-  CheckCircle
+  CheckCircle,
+  ShieldCheck,
+  ShieldAlert
 } from 'lucide-react';
 
 export const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState<TabType>('home');
-  const { status } = useConnectionStore();
+  const { status, isAuthenticated } = useConnectionStore();
 
   useEffect(() => {
     // Attempt auto-connect on startup
@@ -44,6 +47,16 @@ export const App: React.FC = () => {
           </div>
 
           <div className="flex items-center gap-2">
+            {status === 'connected' && (
+              <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold border ${
+                isAuthenticated 
+                  ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' 
+                  : 'bg-amber-500/10 text-amber-400 border-amber-500/20'
+              }`}>
+                {isAuthenticated ? <ShieldCheck className="w-3 h-3" /> : <ShieldAlert className="w-3 h-3" />}
+                {isAuthenticated ? 'Paired' : 'Unpaired'}
+              </span>
+            )}
             <div className={`w-2.5 h-2.5 rounded-full ${
               status === 'connected' ? 'bg-emerald-400 shadow-md shadow-emerald-400/50' : 
               status === 'connecting' || status === 'reconnecting' ? 'bg-amber-400 animate-ping' : 
@@ -53,6 +66,9 @@ export const App: React.FC = () => {
           </div>
         </div>
       </header>
+
+      {/* Pairing Modal (Active when connected and unauthenticated) */}
+      <PairingModal />
 
       {/* Main View Area */}
       <main className={`flex-1 ${

@@ -11,6 +11,7 @@ using RemoteAgent.Network.Protocol;
 using RemoteAgent.Platform.Audio;
 using RemoteAgent.Platform.Input;
 using RemoteAgent.Platform.Media;
+using RemoteAgent.Security;
 
 namespace RemoteAgent.Network;
 
@@ -18,14 +19,17 @@ public class AgentWebSocketManager
 {
     private readonly ILogger<AgentWebSocketManager> _logger;
     private readonly AgentOptions _options;
+    private readonly PairingManager _pairingManager;
     private readonly IInputSimulator _inputSimulator;
     private readonly IAudioManager _audioManager;
     private readonly IMediaManager _mediaManager;
     private readonly Platform.SystemControl.ISystemControlManager _systemControlManager;
     private readonly Platform.Screen.ScreenStreamCoordinator _screenCoordinator;
     private readonly Platform.Screen.IScreenCaptureEngine _screenCaptureEngine;
+
     private readonly ConcurrentDictionary<string, ActiveConnection> _connections = new();
-    private readonly ConcurrentDictionary<string, bool> _authenticatedConnections = new();
+    private readonly ConcurrentDictionary<string, ClientSessionInfo> _sessions = new();
+
     private readonly JsonSerializerOptions _jsonOptions = new()
     {
         PropertyNameCaseInsensitive = true
@@ -33,9 +37,27 @@ public class AgentWebSocketManager
 
     public event Action<int>? ActiveConnectionsChanged;
 
+    public sealed class ClientSessionInfo
+    {
+        public string ConnectionId { get; }
+        public string ClientIp { get; }
+        public bool IsAuthenticated { get; set; }
+        public string? DeviceId { get; set; }
+        public string? DeviceName { get; set; }
+        public HashSet<string> Capabilities { get; } = new(StringComparer.OrdinalIgnoreCase);
+        public ConnectionRateLimiter RateLimiter { get; } = new();
+
+        public ClientSessionInfo(string connectionId, string clientIp)
+        {
+            ConnectionId = connectionId;
+            ClientIp = clientIp;
+        }
+    }
+
     public AgentWebSocketManager(
         ILogger<AgentWebSocketManager> logger, 
         IOptions<AgentOptions> options,
+        PairingManager pairingManager,
         IInputSimulator inputSimulator,
         IAudioManager audioManager,
         IMediaManager mediaManager,
@@ -45,6 +67,7 @@ public class AgentWebSocketManager
     {
         _logger = logger;
         _options = options.Value;
+        _pairingManager = pairingManager;
         _inputSimulator = inputSimulator;
         _audioManager = audioManager;
         _mediaManager = mediaManager;
@@ -52,25 +75,25 @@ public class AgentWebSocketManager
         _screenCoordinator = screenCoordinator;
         _screenCaptureEngine = screenCaptureEngine;
 
-        // Broadcast real-time volume state changes to all connected iPhones
+        // Broadcast real-time volume state changes to authenticated clients only
         _audioManager.VolumeChanged += state =>
         {
             var envelope = MessageEnvelope<VolumeStatePayload>.Create("event", ActionTypes.VolumeState, state);
-            _ = BroadcastAsync(envelope);
+            _ = BroadcastToAuthenticatedAsync(envelope, SecurityCapabilities.VolumeControl);
         };
 
-        // Broadcast real-time now-playing changes to all connected iPhones
+        // Broadcast real-time now-playing changes to authenticated clients only
         _mediaManager.NowPlayingChanged += meta =>
         {
             var envelope = MessageEnvelope<MediaNowPlayingPayload>.Create("event", ActionTypes.MediaNowPlaying, meta);
-            _ = BroadcastAsync(envelope);
+            _ = BroadcastToAuthenticatedAsync(envelope, SecurityCapabilities.MediaControl);
         };
 
-        // Broadcast real-time power/shutdown timer changes to all connected iPhones
+        // Broadcast real-time power/shutdown timer changes to authenticated clients only
         _systemControlManager.ShutdownStatusChanged += status =>
         {
             var envelope = MessageEnvelope<PowerStatusPayload>.Create("event", ActionTypes.PowerStatus, status);
-            _ = BroadcastAsync(envelope);
+            _ = BroadcastToAuthenticatedAsync(envelope, SecurityCapabilities.PowerControl);
         };
 
         // Send screen telemetry updates to active streaming clients
@@ -85,20 +108,43 @@ public class AgentWebSocketManager
     }
 
     public int ActiveConnectionCount => _connections.Count;
+    public int AuthenticatedConnectionCount => _sessions.Values.Count(s => s.IsAuthenticated);
 
     public async Task HandleConnectionAsync(HttpContext context, WebSocket webSocket)
     {
         var connectionId = Guid.NewGuid().ToString("N");
         var clientIp = context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
         var activeConn = new ActiveConnection(connectionId, webSocket);
+        var session = new ClientSessionInfo(connectionId, clientIp);
 
         _connections.TryAdd(connectionId, activeConn);
+        _sessions.TryAdd(connectionId, session);
+
         _logger.LogInformation("WebSocket client connected. ID: {ConnectionId}, IP: {ClientIp}", connectionId, clientIp);
         ActiveConnectionsChanged?.Invoke(_connections.Count);
 
-        bool isAuth = string.IsNullOrEmpty(_options.AuthToken) ||
-                      (context.Request.Query.TryGetValue("token", out var tokenVal) && tokenVal.ToString() == _options.AuthToken);
-        _authenticatedConnections[connectionId] = isAuth;
+        // Check if a valid token was passed during handshake (e.g. from saved credentials)
+        if (context.Request.Query.TryGetValue("token", out var tokenVal))
+        {
+            var tokenStr = tokenVal.ToString();
+            if (_pairingManager.ValidateToken(tokenStr, out var pairedDevice))
+            {
+                session.IsAuthenticated = true;
+                session.DeviceId = pairedDevice!.DeviceId;
+                session.DeviceName = pairedDevice.DeviceName;
+                session.Capabilities.Clear();
+                foreach (var c in pairedDevice.Capabilities) session.Capabilities.Add(c);
+                _logger.LogInformation("Client {ConnectionId} authenticated via handshake token ({DeviceName})", connectionId, session.DeviceName);
+            }
+            else if (!string.IsNullOrEmpty(_options.AuthToken) && tokenStr == _options.AuthToken)
+            {
+                session.IsAuthenticated = true;
+                session.DeviceId = "legacy";
+                session.DeviceName = "Configured Token";
+                session.Capabilities.Clear();
+                foreach (var c in SecurityCapabilities.All) session.Capabilities.Add(c);
+            }
+        }
 
         try
         {
@@ -113,15 +159,11 @@ public class AgentWebSocketManager
             var helloEnvelope = MessageEnvelope<ServerHelloPayload>.Create("event", ActionTypes.SystemHello, helloPayload);
             await SendJsonAsync(activeConn, helloEnvelope, CancellationToken.None);
 
-            // 2. Send initial volume and media states
-            var initialVol = _audioManager.GetVolumeState();
-            await SendJsonAsync(activeConn, MessageEnvelope<VolumeStatePayload>.Create("event", ActionTypes.VolumeState, initialVol), CancellationToken.None);
-
-            var initialMedia = await _mediaManager.GetNowPlayingAsync();
-            await SendJsonAsync(activeConn, MessageEnvelope<MediaNowPlayingPayload>.Create("event", ActionTypes.MediaNowPlaying, initialMedia), CancellationToken.None);
-
-            var initialPower = _systemControlManager.GetCurrentPowerStatus();
-            await SendJsonAsync(activeConn, MessageEnvelope<PowerStatusPayload>.Create("event", ActionTypes.PowerStatus, initialPower), CancellationToken.None);
+            // 2. If authenticated on connect, send initial state payloads
+            if (session.IsAuthenticated)
+            {
+                await SendInitialStatesAsync(activeConn);
+            }
 
             // 3. Read loop
             var buffer = new byte[1024 * 16]; // 16 KB buffer
@@ -159,7 +201,7 @@ public class AgentWebSocketManager
                     ms.Seek(0, SeekOrigin.Begin);
                     using var reader = new StreamReader(ms, Encoding.UTF8);
                     var messageJson = await reader.ReadToEndAsync();
-                    await ProcessMessageAsync(activeConn, messageJson);
+                    await ProcessMessageAsync(activeConn, session, messageJson);
                 }
             }
         }
@@ -174,7 +216,7 @@ public class AgentWebSocketManager
         finally
         {
             _connections.TryRemove(connectionId, out _);
-            _authenticatedConnections.TryRemove(connectionId, out _);
+            _sessions.TryRemove(connectionId, out _);
             _screenCoordinator.StopStream(connectionId);
             _inputSimulator.ReleaseConnectionKeys(connectionId);
             if (_connections.IsEmpty)
@@ -200,7 +242,26 @@ public class AgentWebSocketManager
         }
     }
 
-    private async Task ProcessMessageAsync(ActiveConnection conn, string rawJson)
+    private async Task SendInitialStatesAsync(ActiveConnection conn)
+    {
+        try
+        {
+            var initialVol = _audioManager.GetVolumeState();
+            await SendJsonAsync(conn, MessageEnvelope<VolumeStatePayload>.Create("event", ActionTypes.VolumeState, initialVol), CancellationToken.None);
+
+            var initialMedia = await _mediaManager.GetNowPlayingAsync();
+            await SendJsonAsync(conn, MessageEnvelope<MediaNowPlayingPayload>.Create("event", ActionTypes.MediaNowPlaying, initialMedia), CancellationToken.None);
+
+            var initialPower = _systemControlManager.GetCurrentPowerStatus();
+            await SendJsonAsync(conn, MessageEnvelope<PowerStatusPayload>.Create("event", ActionTypes.PowerStatus, initialPower), CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to send initial states to connection {ConnectionId}", conn.ConnectionId);
+        }
+    }
+
+    private async Task ProcessMessageAsync(ActiveConnection conn, ClientSessionInfo session, string rawJson)
     {
         var connectionId = conn.ConnectionId;
         try
@@ -208,19 +269,73 @@ public class AgentWebSocketManager
             using var doc = JsonDocument.Parse(rawJson);
             var root = doc.RootElement;
 
-            if (!root.TryGetProperty("action", out var actionProp))
+            // 1. Protocol Version Validation
+            if (root.TryGetProperty("version", out var versionProp) && versionProp.ValueKind == JsonValueKind.Number)
             {
-                _logger.LogWarning("Received message without 'action' property: {Json}", rawJson);
+                int ver = versionProp.GetInt32();
+                if (ver != 1)
+                {
+                    await SendErrorAsync(conn, "BAD_REQUEST", $"Unsupported protocol version: {ver}. Expected version 1.");
+                    return;
+                }
+            }
+
+            // 2. Action Property Validation
+            if (!root.TryGetProperty("action", out var actionProp) || actionProp.ValueKind != JsonValueKind.String)
+            {
+                _logger.LogWarning("Received message without valid 'action' property from {ConnectionId}", connectionId);
+                await SendErrorAsync(conn, "BAD_REQUEST", "Message must specify string 'action'");
                 return;
             }
 
             var action = actionProp.GetString();
+            if (string.IsNullOrEmpty(action))
+            {
+                await SendErrorAsync(conn, "BAD_REQUEST", "Action cannot be empty");
+                return;
+            }
+
+            // 3. Rate Limiting Check
+            if (!session.RateLimiter.CheckAllowed(action, out var limitReason))
+            {
+                _logger.LogWarning("Rate limit triggered for {Action} from {ConnectionId}: {Reason}", action, connectionId, limitReason);
+                await SendErrorAsync(conn, "RATE_LIMITED", limitReason ?? "Rate limit exceeded", action);
+                return;
+            }
+
+            // 4. Authentication Check for Privileged Actions
+            bool isPublicAction = action.Equals(ActionTypes.SystemPing, StringComparison.OrdinalIgnoreCase) ||
+                                  action.Equals(ActionTypes.AuthPair, StringComparison.OrdinalIgnoreCase) ||
+                                  action.Equals(ActionTypes.AuthLogin, StringComparison.OrdinalIgnoreCase) ||
+                                  action.Equals(ActionTypes.AuthStatus, StringComparison.OrdinalIgnoreCase);
+
+            if (!isPublicAction)
+            {
+                if (!session.IsAuthenticated)
+                {
+                    _logger.LogWarning("Unauthenticated command '{Action}' rejected from {ConnectionId}", action, connectionId);
+                    await SendErrorAsync(conn, "UNAUTHORIZED", "Authentication required for this operation", action);
+                    return;
+                }
+
+                // 5. Capability-Based Authorization Check
+                var requiredCap = SecurityCapabilities.MapActionToCapability(action);
+                if (requiredCap != null && !session.Capabilities.Contains(requiredCap))
+                {
+                    _logger.LogWarning("Unauthorized command '{Action}' (requires {Cap}) rejected for {ConnectionId}", action, requiredCap, connectionId);
+                    await SendErrorAsync(conn, "FORBIDDEN", $"Missing required capability: {requiredCap}", action);
+                    return;
+                }
+            }
+
+            // 6. Action Processing & Payload Validation
             switch (action)
             {
                 case ActionTypes.SystemPing:
                     long clientTime = 0;
-                    if (root.TryGetProperty("payload", out var payloadProp) &&
-                        payloadProp.TryGetProperty("clientTime", out var clientTimeProp))
+                    if (root.TryGetProperty("payload", out var pingPayload) &&
+                        pingPayload.TryGetProperty("clientTime", out var clientTimeProp) &&
+                        clientTimeProp.ValueKind == JsonValueKind.Number)
                     {
                         clientTime = clientTimeProp.GetInt64();
                     }
@@ -230,15 +345,140 @@ public class AgentWebSocketManager
                         ClientTime = clientTime,
                         ServerTime = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
                     };
-                    var pongEnvelope = MessageEnvelope<PongPayload>.Create("heartbeat", ActionTypes.SystemPong, pong);
-                    await SendJsonAsync(conn, pongEnvelope, CancellationToken.None);
+                    await SendJsonAsync(conn, MessageEnvelope<PongPayload>.Create("heartbeat", ActionTypes.SystemPong, pong), CancellationToken.None);
                     break;
 
+                // --- AUTHENTICATION & PAIRING ---
+                case ActionTypes.AuthPair:
+                    if (root.TryGetProperty("payload", out var pairPayload) &&
+                        pairPayload.TryGetProperty("pin", out var pinProp))
+                    {
+                        string pin = pinProp.GetString() ?? string.Empty;
+                        string devName = pairPayload.TryGetProperty("deviceName", out var devProp) ? devProp.GetString() ?? "iPhone Safari" : "iPhone Safari";
+
+                        bool paired = _pairingManager.VerifyPairingCode(
+                            pin,
+                            session.ClientIp,
+                            devName,
+                            out string? generatedToken,
+                            out string? pairError,
+                            out DevicePairing? pairing);
+
+                        if (paired && pairing != null)
+                        {
+                            session.IsAuthenticated = true;
+                            session.DeviceId = pairing.DeviceId;
+                            session.DeviceName = pairing.DeviceName;
+                            session.Capabilities.Clear();
+                            foreach (var c in pairing.Capabilities) session.Capabilities.Add(c);
+
+                            var res = new AuthResultPayload
+                            {
+                                Authenticated = true,
+                                Token = generatedToken,
+                                DeviceId = pairing.DeviceId,
+                                DeviceName = pairing.DeviceName,
+                                Capabilities = pairing.Capabilities,
+                                Message = "Pairing successful"
+                            };
+                            await SendJsonAsync(conn, MessageEnvelope<AuthResultPayload>.Create("response", ActionTypes.AuthResult, res), CancellationToken.None);
+                            await SendInitialStatesAsync(conn);
+                        }
+                        else
+                        {
+                            var res = new AuthResultPayload
+                            {
+                                Authenticated = false,
+                                Message = pairError ?? "Invalid pairing code"
+                            };
+                            await SendJsonAsync(conn, MessageEnvelope<AuthResultPayload>.Create("response", ActionTypes.AuthResult, res), CancellationToken.None);
+                        }
+                    }
+                    else
+                    {
+                        await SendErrorAsync(conn, "BAD_REQUEST", "Missing 'pin' in auth.pair payload", action);
+                    }
+                    break;
+
+                case ActionTypes.AuthLogin:
+                    if (root.TryGetProperty("payload", out var loginPayload) &&
+                        loginPayload.TryGetProperty("token", out var tokenProp))
+                    {
+                        var clientToken = tokenProp.GetString();
+                        bool valid = false;
+                        string? deviceId = null;
+                        string? deviceName = null;
+                        List<string> caps = new();
+
+                        if (_pairingManager.ValidateToken(clientToken, out var pairedDevice))
+                        {
+                            valid = true;
+                            deviceId = pairedDevice!.DeviceId;
+                            deviceName = pairedDevice.DeviceName;
+                            caps = pairedDevice.Capabilities;
+                        }
+                        else if (!string.IsNullOrEmpty(_options.AuthToken) && clientToken == _options.AuthToken)
+                        {
+                            valid = true;
+                            deviceId = "legacy";
+                            deviceName = "Configured Token";
+                            caps = SecurityCapabilities.All.ToList();
+                        }
+
+                        if (valid)
+                        {
+                            session.IsAuthenticated = true;
+                            session.DeviceId = deviceId;
+                            session.DeviceName = deviceName;
+                            session.Capabilities.Clear();
+                            foreach (var c in caps) session.Capabilities.Add(c);
+
+                            var res = new AuthResultPayload
+                            {
+                                Authenticated = true,
+                                DeviceId = deviceId,
+                                DeviceName = deviceName,
+                                Capabilities = caps,
+                                Message = "Session authenticated"
+                            };
+                            await SendJsonAsync(conn, MessageEnvelope<AuthResultPayload>.Create("response", ActionTypes.AuthResult, res), CancellationToken.None);
+                            await SendInitialStatesAsync(conn);
+                        }
+                        else
+                        {
+                            var res = new AuthResultPayload
+                            {
+                                Authenticated = false,
+                                Message = "Invalid authentication token"
+                            };
+                            await SendJsonAsync(conn, MessageEnvelope<AuthResultPayload>.Create("response", ActionTypes.AuthResult, res), CancellationToken.None);
+                        }
+                    }
+                    else
+                    {
+                        await SendErrorAsync(conn, "BAD_REQUEST", "Missing 'token' in auth.login payload", action);
+                    }
+                    break;
+
+                case ActionTypes.AuthStatus:
+                    var statusPayload = new AuthStatusPayload
+                    {
+                        Authenticated = session.IsAuthenticated,
+                        DeviceId = session.DeviceId,
+                        DeviceName = session.DeviceName,
+                        Capabilities = session.Capabilities.ToList()
+                    };
+                    await SendJsonAsync(conn, MessageEnvelope<AuthStatusPayload>.Create("response", ActionTypes.AuthStatus, statusPayload), CancellationToken.None);
+                    break;
+
+                // --- MOUSE & TOUCHPAD ---
                 case ActionTypes.MouseMove:
                     if (root.TryGetProperty("payload", out var movePayload))
                     {
-                        int dx = movePayload.TryGetProperty("dx", out var dxProp) ? dxProp.GetInt32() : 0;
-                        int dy = movePayload.TryGetProperty("dy", out var dyProp) ? dyProp.GetInt32() : 0;
+                        int dx = movePayload.TryGetProperty("dx", out var dxProp) && dxProp.ValueKind == JsonValueKind.Number ? dxProp.GetInt32() : 0;
+                        int dy = movePayload.TryGetProperty("dy", out var dyProp) && dyProp.ValueKind == JsonValueKind.Number ? dyProp.GetInt32() : 0;
+                        dx = Math.Clamp(dx, -2000, 2000);
+                        dy = Math.Clamp(dy, -2000, 2000);
                         _inputSimulator.MoveMouseRelative(dx, dy);
                     }
                     break;
@@ -247,49 +487,52 @@ public class AgentWebSocketManager
                     if (root.TryGetProperty("payload", out var clickPayload))
                     {
                         var btn = clickPayload.TryGetProperty("button", out var btnProp) ? btnProp.GetString() ?? "left" : "left";
+                        if (!IsValidMouseButton(btn)) { await SendErrorAsync(conn, "INVALID_PARAM", "Invalid mouse button", action); return; }
                         bool isDouble = clickPayload.TryGetProperty("double", out var doubleProp) && doubleProp.GetBoolean();
                         _inputSimulator.MouseClick(btn, isDouble);
                     }
                     break;
 
-                case "mouse.down":
+                case ActionTypes.MouseDown:
                     if (root.TryGetProperty("payload", out var downPayload))
                     {
                         var btn = downPayload.TryGetProperty("button", out var btnProp) ? btnProp.GetString() ?? "left" : "left";
-                        _inputSimulator.MouseDown(btn);
+                        if (!IsValidMouseButton(btn)) { await SendErrorAsync(conn, "INVALID_PARAM", "Invalid mouse button", action); return; }
+                        _inputSimulator.MouseDown(btn, connectionId);
                     }
                     break;
 
-                case "mouse.up":
+                case ActionTypes.MouseUp:
                     if (root.TryGetProperty("payload", out var upPayload))
                     {
                         var btn = upPayload.TryGetProperty("button", out var btnProp) ? btnProp.GetString() ?? "left" : "left";
-                        _inputSimulator.MouseUp(btn);
+                        if (!IsValidMouseButton(btn)) { await SendErrorAsync(conn, "INVALID_PARAM", "Invalid mouse button", action); return; }
+                        _inputSimulator.MouseUp(btn, connectionId);
                     }
                     break;
 
-                case "mouse.scroll":
+                case ActionTypes.MouseScroll:
                     if (root.TryGetProperty("payload", out var scrollPayload))
                     {
-                        int dx = scrollPayload.TryGetProperty("dx", out var dxProp) ? dxProp.GetInt32() : 0;
-                        int dy = scrollPayload.TryGetProperty("dy", out var dyProp) ? dyProp.GetInt32() : 0;
+                        int dx = scrollPayload.TryGetProperty("dx", out var dxProp) && dxProp.ValueKind == JsonValueKind.Number ? dxProp.GetInt32() : 0;
+                        int dy = scrollPayload.TryGetProperty("dy", out var dyProp) && dyProp.ValueKind == JsonValueKind.Number ? dyProp.GetInt32() : 0;
+                        dx = Math.Clamp(dx, -2000, 2000);
+                        dy = Math.Clamp(dy, -2000, 2000);
                         _inputSimulator.MouseScroll(dx, dy);
                     }
                     break;
 
+                // --- KEYBOARD & TEXT ---
                 case ActionTypes.KeyboardText:
                     if (root.TryGetProperty("payload", out var textPayload) &&
                         textPayload.TryGetProperty("text", out var textProp))
                     {
                         var text = textProp.GetString();
-                        if (!string.IsNullOrEmpty(text))
+                        if (text != null)
                         {
-                            // Security: Enforce max 2000 chars per text packet
                             if (text.Length > 2000)
                             {
-                                _logger.LogWarning("Oversized text payload ({Length} chars) rejected from {ConnectionId}", text.Length, connectionId);
-                                var err = new ErrorPayload { Code = "PAYLOAD_TOO_LARGE", Message = "Text payload exceeds 2000 characters limit" };
-                                await SendJsonAsync(conn, MessageEnvelope<ErrorPayload>.Create("response", ActionTypes.SystemError, err), CancellationToken.None);
+                                await SendErrorAsync(conn, "PAYLOAD_TOO_LARGE", "Text payload exceeds 2000 characters limit", action);
                                 return;
                             }
                             _inputSimulator.SendText(text);
@@ -306,9 +549,7 @@ public class AgentWebSocketManager
                         {
                             if (!_inputSimulator.IsValidKey(key))
                             {
-                                _logger.LogWarning("Invalid or unmapped key '{Key}' rejected for KeyDown from {ConnectionId}", key, connectionId);
-                                var err = new ErrorPayload { Code = "INVALID_KEY", Message = $"Key '{key}' is not mapped or recognized" };
-                                await SendJsonAsync(conn, MessageEnvelope<ErrorPayload>.Create("response", ActionTypes.SystemError, err), CancellationToken.None);
+                                await SendErrorAsync(conn, "INVALID_KEY", $"Key '{key}' is not mapped or recognized", action);
                                 return;
                             }
                             _inputSimulator.KeyDown(key, connectionId);
@@ -342,17 +583,13 @@ public class AgentWebSocketManager
 
                         if (keys.Count > 8)
                         {
-                            _logger.LogWarning("Shortcut keys count exceeded ({Count} keys) from {ConnectionId}", keys.Count, connectionId);
-                            var err = new ErrorPayload { Code = "INVALID_SHORTCUT", Message = "Shortcut exceeds 8 keys limit" };
-                            await SendJsonAsync(conn, MessageEnvelope<ErrorPayload>.Create("response", ActionTypes.SystemError, err), CancellationToken.None);
+                            await SendErrorAsync(conn, "INVALID_SHORTCUT", "Shortcut exceeds 8 keys limit", action);
                             return;
                         }
 
                         if (keys.Any(k => !_inputSimulator.IsValidKey(k)))
                         {
-                            _logger.LogWarning("Shortcut contains unrecognized key from {ConnectionId}", connectionId);
-                            var err = new ErrorPayload { Code = "INVALID_KEY", Message = "Shortcut contains unmapped key" };
-                            await SendJsonAsync(conn, MessageEnvelope<ErrorPayload>.Create("response", ActionTypes.SystemError, err), CancellationToken.None);
+                            await SendErrorAsync(conn, "INVALID_KEY", "Shortcut contains unmapped key", action);
                             return;
                         }
 
@@ -367,7 +604,7 @@ public class AgentWebSocketManager
                     _inputSimulator.ReleaseConnectionKeys(connectionId);
                     break;
 
-                // Volume & Audio Mixer (Phase 5)
+                // --- VOLUME & AUDIO ---
                 case ActionTypes.VolumeRequestState:
                     var currentVolState = _audioManager.GetVolumeState();
                     await SendJsonAsync(conn, MessageEnvelope<VolumeStatePayload>.Create("event", ActionTypes.VolumeState, currentVolState), CancellationToken.None);
@@ -376,11 +613,13 @@ public class AgentWebSocketManager
                 case ActionTypes.VolumeSetMaster:
                     if (root.TryGetProperty("payload", out var setMasterPayload))
                     {
-                        if (setMasterPayload.TryGetProperty("volume", out var volProp))
+                        if (setMasterPayload.TryGetProperty("volume", out var volProp) && volProp.ValueKind == JsonValueKind.Number)
                         {
-                            _audioManager.SetMasterVolume((float)volProp.GetDouble());
+                            float vol = Math.Clamp((float)volProp.GetDouble(), 0f, 100f);
+                            _audioManager.SetMasterVolume(vol);
                         }
-                        if (setMasterPayload.TryGetProperty("mute", out var muteProp))
+                        if (setMasterPayload.TryGetProperty("mute", out var muteProp) &&
+                            (muteProp.ValueKind == JsonValueKind.True || muteProp.ValueKind == JsonValueKind.False))
                         {
                             _audioManager.SetMasterMute(muteProp.GetBoolean());
                         }
@@ -391,18 +630,22 @@ public class AgentWebSocketManager
                     if (root.TryGetProperty("payload", out var setSessionPayload))
                     {
                         var sessionId = setSessionPayload.TryGetProperty("sessionId", out var idProp) ? idProp.GetString() ?? "" : "";
-                        if (setSessionPayload.TryGetProperty("volume", out var volProp))
+                        if (sessionId.Length > 256) sessionId = sessionId[..256];
+
+                        if (setSessionPayload.TryGetProperty("volume", out var volProp) && volProp.ValueKind == JsonValueKind.Number)
                         {
-                            _audioManager.SetSessionVolume(sessionId, (float)volProp.GetDouble());
+                            float vol = Math.Clamp((float)volProp.GetDouble(), 0f, 100f);
+                            _audioManager.SetSessionVolume(sessionId, vol);
                         }
-                        if (setSessionPayload.TryGetProperty("mute", out var muteProp))
+                        if (setSessionPayload.TryGetProperty("mute", out var muteProp) &&
+                            (muteProp.ValueKind == JsonValueKind.True || muteProp.ValueKind == JsonValueKind.False))
                         {
                             _audioManager.SetSessionMute(sessionId, muteProp.GetBoolean());
                         }
                     }
                     break;
 
-                // Media Control (Phase 5)
+                // --- MEDIA CONTROL ---
                 case ActionTypes.MediaRequestNowPlaying:
                     var nowPlaying = await _mediaManager.GetNowPlayingAsync();
                     await SendJsonAsync(conn, MessageEnvelope<MediaNowPlayingPayload>.Create("event", ActionTypes.MediaNowPlaying, nowPlaying), CancellationToken.None);
@@ -413,14 +656,18 @@ public class AgentWebSocketManager
                         mediaPayload.TryGetProperty("action", out var mediaActionProp))
                     {
                         var act = mediaActionProp.GetString();
-                        if (!string.IsNullOrEmpty(act))
+                        if (IsValidMediaAction(act))
                         {
-                            await _mediaManager.ExecuteMediaActionAsync(act);
+                            await _mediaManager.ExecuteMediaActionAsync(act!);
+                        }
+                        else
+                        {
+                            await SendErrorAsync(conn, "INVALID_PARAM", $"Invalid media action: {act}", action);
                         }
                     }
                     break;
 
-                // Power & System Controls (Phase 6)
+                // --- POWER & SYSTEM CONTROLS ---
                 case ActionTypes.PowerRequestStatus:
                     var powerStatus = _systemControlManager.GetCurrentPowerStatus();
                     await SendJsonAsync(conn, MessageEnvelope<PowerStatusPayload>.Create("event", ActionTypes.PowerStatus, powerStatus), CancellationToken.None);
@@ -430,8 +677,8 @@ public class AgentWebSocketManager
                     if (root.TryGetProperty("payload", out var powerPayload) &&
                         powerPayload.TryGetProperty("action", out var pActionProp))
                     {
-                        var act = pActionProp.GetString();
-                        switch (act?.ToLowerInvariant())
+                        var act = pActionProp.GetString()?.ToLowerInvariant();
+                        switch (act)
                         {
                             case "lock":
                                 _systemControlManager.LockWorkstation();
@@ -461,7 +708,7 @@ public class AgentWebSocketManager
                                 _systemControlManager.RestartNow();
                                 break;
                             default:
-                                _logger.LogWarning("Unknown power action requested: {Action}", act);
+                                await SendErrorAsync(conn, "INVALID_PARAM", $"Unknown power action: {act}", action);
                                 break;
                         }
                     }
@@ -471,8 +718,10 @@ public class AgentWebSocketManager
                     if (root.TryGetProperty("payload", out var schedulePayload))
                     {
                         var schedAction = schedulePayload.TryGetProperty("action", out var schedActProp) ? schedActProp.GetString() ?? "shutdown" : "shutdown";
-                        var timeoutSeconds = schedulePayload.TryGetProperty("timeoutSeconds", out var secProp) ? secProp.GetInt32() : 1800;
-                        if (timeoutSeconds <= 0) timeoutSeconds = 60;
+                        int timeoutSeconds = schedulePayload.TryGetProperty("timeoutSeconds", out var secProp) && secProp.ValueKind == JsonValueKind.Number 
+                            ? secProp.GetInt32() 
+                            : 1800;
+                        timeoutSeconds = Math.Clamp(timeoutSeconds, 10, 86400);
 
                         if (schedAction.Equals("restart", StringComparison.OrdinalIgnoreCase))
                         {
@@ -486,50 +735,38 @@ public class AgentWebSocketManager
                     break;
 
                 case ActionTypes.PowerCancel:
-                    if (!IsAuthorized(connectionId)) { await SendUnauthorizedAsync(conn); return; }
                     _systemControlManager.CancelScheduledShutdown();
                     break;
 
                 case ActionTypes.SystemLaunchApp:
-                    if (!IsAuthorized(connectionId)) { await SendUnauthorizedAsync(conn); return; }
                     if (root.TryGetProperty("payload", out var launchPayload) &&
                         launchPayload.TryGetProperty("app", out var appProp))
                     {
                         var appName = appProp.GetString();
-                        if (!string.IsNullOrEmpty(appName))
+                        if (!string.IsNullOrEmpty(appName) && IsValidAppName(appName))
                         {
                             _systemControlManager.LaunchApp(appName);
+                        }
+                        else
+                        {
+                            await SendErrorAsync(conn, "INVALID_PARAM", "Invalid app identifier", action);
                         }
                     }
                     break;
 
-                // Auth & Pairing (WAN Security)
-                case ActionTypes.AuthLogin:
-                    if (root.TryGetProperty("payload", out var loginPayload) &&
-                        loginPayload.TryGetProperty("token", out var tokenProp))
-                    {
-                        var clientToken = tokenProp.GetString();
-                        bool ok = string.IsNullOrEmpty(_options.AuthToken) || clientToken == _options.AuthToken;
-                        _authenticatedConnections[connectionId] = ok;
-                        var res = new AuthResultPayload
-                        {
-                            Authenticated = ok,
-                            Message = ok ? "Authentication successful" : "Invalid auth token"
-                        };
-                        await SendJsonAsync(conn, MessageEnvelope<AuthResultPayload>.Create("response", ActionTypes.AuthResult, res), CancellationToken.None);
-                    }
-                    break;
-
-                // Screen Mirroring & Stream (Phase 7)
+                // --- SCREEN STREAMING & MIRRORING ---
                 case ActionTypes.ScreenStart:
-                    if (!IsAuthorized(connectionId)) { await SendUnauthorizedAsync(conn); return; }
                     var cfg = new ScreenStartPayload();
                     if (root.TryGetProperty("payload", out var sStartPayload))
                     {
-                        if (sStartPayload.TryGetProperty("fps", out var fpsP)) cfg.Fps = fpsP.GetInt32();
-                        if (sStartPayload.TryGetProperty("quality", out var qP)) cfg.Quality = qP.GetInt32();
-                        if (sStartPayload.TryGetProperty("scale", out var scP)) cfg.Scale = (float)scP.GetDouble();
-                        if (sStartPayload.TryGetProperty("monitorIndex", out var monP)) cfg.MonitorIndex = monP.GetInt32();
+                        if (sStartPayload.TryGetProperty("fps", out var fpsP) && fpsP.ValueKind == JsonValueKind.Number) 
+                            cfg.Fps = Math.Clamp(fpsP.GetInt32(), 1, 30);
+                        if (sStartPayload.TryGetProperty("quality", out var qP) && qP.ValueKind == JsonValueKind.Number) 
+                            cfg.Quality = Math.Clamp(qP.GetInt32(), 10, 100);
+                        if (sStartPayload.TryGetProperty("scale", out var scP) && scP.ValueKind == JsonValueKind.Number) 
+                            cfg.Scale = Math.Clamp((float)scP.GetDouble(), 0.25f, 1.0f);
+                        if (sStartPayload.TryGetProperty("monitorIndex", out var monP) && monP.ValueKind == JsonValueKind.Number) 
+                            cfg.MonitorIndex = Math.Max(0, monP.GetInt32());
                     }
                     _screenCoordinator.StartStream(connectionId, (packet, ct) => conn.SendAsync(new ArraySegment<byte>(packet), WebSocketMessageType.Binary, true, ct), cfg);
                     break;
@@ -539,15 +776,17 @@ public class AgentWebSocketManager
                     break;
 
                 case ActionTypes.ScreenSnapshot:
-                    if (!IsAuthorized(connectionId)) { await SendUnauthorizedAsync(conn); return; }
                     int monIdx = 0;
                     float snapScale = 1.0f;
                     int snapQuality = 85;
                     if (root.TryGetProperty("payload", out var snapPayload))
                     {
-                        if (snapPayload.TryGetProperty("monitorIndex", out var mP)) monIdx = mP.GetInt32();
-                        if (snapPayload.TryGetProperty("scale", out var sP)) snapScale = (float)sP.GetDouble();
-                        if (snapPayload.TryGetProperty("quality", out var qP)) snapQuality = qP.GetInt32();
+                        if (snapPayload.TryGetProperty("monitorIndex", out var mP) && mP.ValueKind == JsonValueKind.Number) 
+                            monIdx = Math.Max(0, mP.GetInt32());
+                        if (snapPayload.TryGetProperty("scale", out var sP) && sP.ValueKind == JsonValueKind.Number) 
+                            snapScale = Math.Clamp((float)sP.GetDouble(), 0.25f, 1.0f);
+                        if (snapPayload.TryGetProperty("quality", out var qP) && qP.ValueKind == JsonValueKind.Number) 
+                            snapQuality = Math.Clamp(qP.GetInt32(), 10, 100);
                     }
                     var snapFrame = _screenCoordinator.CaptureSnapshot(monIdx, snapScale, snapQuality);
                     if (snapFrame != null)
@@ -558,13 +797,16 @@ public class AgentWebSocketManager
                     break;
 
                 case ActionTypes.ScreenTouch:
-                    if (!IsAuthorized(connectionId)) { await SendUnauthorizedAsync(conn); return; }
                     if (root.TryGetProperty("payload", out var touchPayload))
                     {
-                        float normX = touchPayload.TryGetProperty("normX", out var nxP) ? (float)nxP.GetDouble() : 0.5f;
-                        float normY = touchPayload.TryGetProperty("normY", out var nyP) ? (float)nyP.GetDouble() : 0.5f;
+                        float normX = touchPayload.TryGetProperty("normX", out var nxP) && nxP.ValueKind == JsonValueKind.Number ? (float)nxP.GetDouble() : 0.5f;
+                        float normY = touchPayload.TryGetProperty("normY", out var nyP) && nyP.ValueKind == JsonValueKind.Number ? (float)nyP.GetDouble() : 0.5f;
+                        normX = Math.Clamp(normX, 0f, 1f);
+                        normY = Math.Clamp(normY, 0f, 1f);
+
                         string tType = touchPayload.TryGetProperty("type", out var ttP) ? ttP.GetString() ?? "click" : "click";
                         string tBtn = touchPayload.TryGetProperty("button", out var tbP) ? tbP.GetString() ?? "left" : "left";
+                        if (!IsValidMouseButton(tBtn)) tBtn = "left";
 
                         var screens = System.Windows.Forms.Screen.AllScreens;
                         var targetScreen = screens.Length > 0 ? screens[0] : null;
@@ -587,10 +829,10 @@ public class AgentWebSocketManager
                                     _inputSimulator.MouseClick("right", false);
                                     break;
                                 case "down":
-                                    _inputSimulator.MouseDown(tBtn);
+                                    _inputSimulator.MouseDown(tBtn, connectionId);
                                     break;
                                 case "up":
-                                    _inputSimulator.MouseUp(tBtn);
+                                    _inputSimulator.MouseUp(tBtn, connectionId);
                                     break;
                                 case "move":
                                     // position already updated
@@ -606,21 +848,48 @@ public class AgentWebSocketManager
                     break;
 
                 default:
-                    _logger.LogInformation("Unhandled protocol action received: {Action}", action);
+                    _logger.LogInformation("Unhandled or unknown protocol action received: {Action}", action);
+                    await SendErrorAsync(conn, "UNKNOWN_ACTION", $"Unknown action '{action}'", action);
                     break;
             }
         }
         catch (JsonException ex)
         {
-            _logger.LogWarning(ex, "Failed to parse incoming WebSocket JSON message: {Raw}", rawJson);
-            var err = new ErrorPayload
-            {
-                Code = "BAD_REQUEST",
-                Message = "Malformed JSON message"
-            };
-            var errEnvelope = MessageEnvelope<ErrorPayload>.Create("response", ActionTypes.SystemError, err);
-            await SendJsonAsync(conn, errEnvelope, CancellationToken.None);
+            _logger.LogWarning(ex, "Failed to parse incoming WebSocket JSON message from {ConnectionId}", connectionId);
+            await SendErrorAsync(conn, "BAD_REQUEST", "Malformed JSON message");
         }
+    }
+
+    private static bool IsValidMouseButton(string? button) =>
+        button != null && (button.Equals("left", StringComparison.OrdinalIgnoreCase) ||
+                           button.Equals("right", StringComparison.OrdinalIgnoreCase) ||
+                           button.Equals("middle", StringComparison.OrdinalIgnoreCase));
+
+    private static bool IsValidMediaAction(string? action) =>
+        action != null && (action.Equals("play", StringComparison.OrdinalIgnoreCase) ||
+                           action.Equals("pause", StringComparison.OrdinalIgnoreCase) ||
+                           action.Equals("playpause", StringComparison.OrdinalIgnoreCase) ||
+                           action.Equals("next", StringComparison.OrdinalIgnoreCase) ||
+                           action.Equals("previous", StringComparison.OrdinalIgnoreCase) ||
+                           action.Equals("stop", StringComparison.OrdinalIgnoreCase));
+
+    private static bool IsValidAppName(string app)
+    {
+        if (app.Length > 60) return false;
+        // Whitelist alphanumeric, dots, hyphens, and underscores only (prevent cmd injection)
+        return app.All(c => char.IsLetterOrDigit(c) || c is '.' or '-' or '_' or ' ');
+    }
+
+    private Task SendErrorAsync(ActiveConnection conn, string code, string message, string? originalAction = null)
+    {
+        var err = new ErrorPayload
+        {
+            Code = code,
+            Message = message,
+            OriginalAction = originalAction
+        };
+        var env = MessageEnvelope<ErrorPayload>.Create("response", ActionTypes.SystemError, err);
+        return SendJsonAsync(conn, env, CancellationToken.None);
     }
 
     public async Task<bool> SendJsonAsync<T>(ActiveConnection conn, MessageEnvelope<T> envelope, CancellationToken cancellationToken = default)
@@ -635,82 +904,22 @@ public class AgentWebSocketManager
         return await conn.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, cancellationToken);
     }
 
+    public async Task BroadcastToAuthenticatedAsync<T>(MessageEnvelope<T> envelope, string requiredCapability, CancellationToken cancellationToken = default)
+    {
+        var tasks = _sessions
+            .Where(kv => kv.Value.IsAuthenticated && kv.Value.Capabilities.Contains(requiredCapability))
+            .Select(kv => _connections.TryGetValue(kv.Key, out var conn) ? conn : null)
+            .Where(c => c != null && c.Socket.State == WebSocketState.Open)
+            .Select(c => SendJsonAsync(c!, envelope, cancellationToken));
+
+        await Task.WhenAll(tasks);
+    }
+
     public async Task BroadcastAsync<T>(MessageEnvelope<T> envelope, CancellationToken cancellationToken = default)
     {
         var tasks = _connections.Values
             .Where(c => c.Socket.State == WebSocketState.Open)
             .Select(c => SendJsonAsync(c, envelope, cancellationToken));
         await Task.WhenAll(tasks);
-    }
-
-    private bool IsAuthorized(string connectionId)
-    {
-        if (string.IsNullOrEmpty(_options.AuthToken)) return true;
-        return _authenticatedConnections.TryGetValue(connectionId, out var auth) && auth;
-    }
-
-    private Task<bool> SendUnauthorizedAsync(ActiveConnection conn)
-    {
-        var err = new ErrorPayload
-        {
-            Code = "UNAUTHORIZED",
-            Message = "Authentication required for this operation"
-        };
-        return SendJsonAsync(conn, MessageEnvelope<ErrorPayload>.Create("response", ActionTypes.SystemError, err), CancellationToken.None);
-    }
-}
-
-public sealed class ActiveConnection : IDisposable
-{
-    public string ConnectionId { get; }
-    public WebSocket Socket { get; }
-    public SemaphoreSlim SendLock { get; } = new(1, 1);
-
-    public ActiveConnection(string connectionId, WebSocket socket)
-    {
-        ConnectionId = connectionId;
-        Socket = socket;
-    }
-
-    public async Task<bool> SendAsync(ArraySegment<byte> buffer, WebSocketMessageType messageType, bool endOfMessage, CancellationToken ct)
-    {
-        if (Socket.State != WebSocketState.Open)
-        {
-            return false;
-        }
-
-        bool lockAcquired = false;
-        try
-        {
-            lockAcquired = await SendLock.WaitAsync(TimeSpan.FromSeconds(8), ct);
-            if (!lockAcquired)
-            {
-                return false;
-            }
-
-            if (Socket.State != WebSocketState.Open)
-            {
-                return false;
-            }
-
-            await Socket.SendAsync(buffer, messageType, endOfMessage, ct);
-            return true;
-        }
-        catch
-        {
-            return false;
-        }
-        finally
-        {
-            if (lockAcquired)
-            {
-                try { SendLock.Release(); } catch { }
-            }
-        }
-    }
-
-    public void Dispose()
-    {
-        SendLock.Dispose();
     }
 }

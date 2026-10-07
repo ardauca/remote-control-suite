@@ -31,6 +31,7 @@ public class CapturedFrame : IDisposable
     public ushort NormalizedCursorY { get; set; } // 0 - 65535
     public bool CursorVisible { get; set; }
     public long CaptureDurationMs { get; set; }
+    public long EncodeDurationMs { get; set; }
     public DateTime TimestampUtc { get; set; } = DateTime.UtcNow;
 
     public void Dispose()

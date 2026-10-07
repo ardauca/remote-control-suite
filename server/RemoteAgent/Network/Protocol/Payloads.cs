@@ -199,6 +199,15 @@ public class PowerStatusPayload
 }
 
 // Auth & Security
+public class AuthPairPayload
+{
+    [JsonPropertyName("pin")]
+    public string Pin { get; set; } = string.Empty;
+
+    [JsonPropertyName("deviceName")]
+    public string DeviceName { get; set; } = string.Empty;
+}
+
 public class AuthLoginPayload
 {
     [JsonPropertyName("token")]
@@ -210,8 +219,35 @@ public class AuthResultPayload
     [JsonPropertyName("authenticated")]
     public bool Authenticated { get; set; }
 
+    [JsonPropertyName("token")]
+    public string? Token { get; set; }
+
+    [JsonPropertyName("deviceId")]
+    public string? DeviceId { get; set; }
+
+    [JsonPropertyName("deviceName")]
+    public string? DeviceName { get; set; }
+
+    [JsonPropertyName("capabilities")]
+    public List<string> Capabilities { get; set; } = new();
+
     [JsonPropertyName("message")]
     public string Message { get; set; } = string.Empty;
+}
+
+public class AuthStatusPayload
+{
+    [JsonPropertyName("authenticated")]
+    public bool Authenticated { get; set; }
+
+    [JsonPropertyName("deviceId")]
+    public string? DeviceId { get; set; }
+
+    [JsonPropertyName("deviceName")]
+    public string? DeviceName { get; set; }
+
+    [JsonPropertyName("capabilities")]
+    public List<string> Capabilities { get; set; } = new();
 }
 
 // Screen Mirroring & Stream (Phase 7)
@@ -267,6 +303,9 @@ public class ScreenTelemetryPayload
 
     [JsonPropertyName("captureDurationMs")]
     public long CaptureDurationMs { get; set; }
+
+    [JsonPropertyName("encodeDurationMs")]
+    public long EncodeDurationMs { get; set; }
 
     [JsonPropertyName("sendDurationMs")]
     public long SendDurationMs { get; set; }

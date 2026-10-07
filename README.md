@@ -6,56 +6,81 @@
 [![Vite](https://img.shields.io/badge/Vite-6.2-646cff?style=flat-square&logo=vite)](https://vitejs.dev/)
 [![Tailwind CSS](https://img.shields.io/badge/Tailwind_CSS-3.4-38bdf8?style=flat-square&logo=tailwindcss)](https://tailwindcss.com/)
 [![Platform](https://img.shields.io/badge/Platform-Windows%2010%20%2F%2011%20%7C%20iOS%20Safari-0078d4?style=flat-square)](https://github.com/ardauca/remote-control-suite)
+[![Security](https://img.shields.io/badge/Security-PIN%20Pairing%20%2B%20Token%20Auth-emerald?style=flat-square)](docs/PROTOCOL.md)
 [![License](https://img.shields.io/badge/License-MIT-green.svg?style=flat-square)](LICENSE)
 
-Production-quality, ultra low-latency, zero-cloud PC remote control platform for iPhone (Safari / PWA) and Windows 10/11. No App Store account, no paid developer licenses, no third-party cloud servers, and no subscriptions required.
+Secure, measured, maintainable LAN-first PC remote control application for iPhone (Safari / PWA) and Windows 10/11. Zero cloud accounts, zero third-party relay servers, zero telemetry tracking, and zero subscriptions required.
+
+---
+
+## 🔒 Security Architecture & LAN Pairing
+
+The remote control attack surface is hardened with defense-in-depth:
+
+* **Mandatory Authentication:** Every WebSocket connection must authenticate before privileged commands are executed. Unauthenticated sockets are restricted solely to `system.ping`, `auth.pair`, `auth.login`, and `auth.status`.
+* **LAN PIN Pairing Flow:**
+  1. The Windows agent generates a cryptographically random 6-digit numeric PIN on startup.
+  2. The iPhone client displays a pairing prompt upon connecting to the local IP.
+  3. The server validates the PIN using constant-time timing-safe comparisons (`CryptographicOperations.FixedTimeEquals`).
+  4. On successful pairing, the server generates a 256-bit cryptographically secure session token and stores only its SHA-256 hash in `%LocalAppData%\RemoteControlSuite\pairings.json`.
+  5. Brute-force lockout: 5 failed attempts from an IP address triggers a 5-minute lockout.
+* **Capability-Based Authorization:** Operations are partitioned into capabilities (`input.control`, `media.control`, `volume.control`, `power.control`, `screen.read`).
+* **Multi-Tier Token-Bucket Rate Limiting:**
+  * Mouse movement: 120 events/sec
+  * Clicks & Keys: 60 burst, 40 events/sec
+  * Text & Shortcuts: 15 burst, 10 events/sec
+  * Power & Launch Commands: 2 burst, 1 per 2.5s
+  * Screen Streaming Requests: 5 burst, 4 requests/sec
+* **Input Clamping & Validation:** Strict clamping on coordinate deltas, whitelist validation for keys and mouse buttons, payload size checks, and screen parameter range enforcement.
+* **Disconnect Safety Release:** Automatically releases all remote held keyboard modifier keys (`CTRL`, `ALT`, `SHIFT`, `WIN`) and mouse buttons (`LEFT`, `RIGHT`, `MIDDLE`) whenever a client disconnects.
+* **Restrictive Private LAN CORS:** Limits HTTP access to local loopback and RFC 1918 private LAN IP ranges (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16).
+* **Restricted Snapshot Endpoint:** `/api/screen/snapshot` requires a valid `Authorization: Bearer <TOKEN>` header or authenticated token parameter.
+
+---
+
+## 📊 Measured Performance Benchmarks
+
+Rather than unverified marketing claims like "zero latency", this project benchmarks real performance metrics over standard 5 GHz Wi-Fi:
+
+### Screen Streaming Pipeline Benchmarks (GDI Capture + JPEG Encoding)
+
+| Preset | Target Resolution | Target FPS | Actual FPS | Host Capture | Host Encode | Total Pipeline Latency | Avg Frame Size | Network Throughput | Dropped Frames |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **Mobile** | 540p (0.55x) | 8 FPS | **9.2 FPS** | ~23 ms | ~1 ms | **~24 ms** | 39.5 KB | 363 KB/s (~21 MB/min) | **0** |
+| **Balanced** | 720p (0.75x) | 15 FPS | **12.6 FPS** | ~26 ms | ~3 ms | **~29 ms** | 84.1 KB | 1059 KB/s (~62 MB/min) | **0** |
+| **High Wi-Fi** | 1080p (1.00x) | 25 FPS | **21.1 FPS** | ~18 ms | ~4 ms | **~22 ms** | 193.1 KB | 4080 KB/s (~239 MB/min) | **0** |
+
+*Measured on Windows 10/11 Host (Intel/AMD x64, 1080p desktop) with Node.js automated benchmark client.*
 
 ---
 
 ## 🚀 Key Features
 
-* **Zero Cloud & Private:** Everything runs directly on your local Wi-Fi network (LAN) over high-performance WebSockets.
-* **Ultra-Low Latency Mouse & Touchpad (Phase 3):**
-  * Precision relative cursor tracking via Win32 `SetCursorPos` and `mouse_event`.
-  * Multi-touch gestures: single-tap left click, two-finger right click, two-finger vertical scrolling with inertia.
-  * Drag & Drop lock mode with physical haptic vibration feedback.
-  * Customizable cursor sensitivity and scroll invert options.
-* **Virtual Keyboard & Unicode Engine (Phase 4):**
-  * Native iOS virtual keyboard trigger.
-  * Full Unicode support (`KEYEVENTF_UNICODE`) — type Turkish characters (`ç, ğ, ı, İ, ö, ş, ü`), symbols, and emojis accurately into any active Windows application.
+* **Relative Mouse & Touchpad:**
+  * Sub-pixel delta coalescing via `requestAnimationFrame` to eliminate jitter.
+  * Multi-touch gestures: single-tap left click, two-finger right click, two-finger scrolling.
+  * Drag & Drop lock mode with physical vibration haptics.
+* **Virtual Keyboard & Unicode Engine:**
+  * Full Turkish character support (`ç, ğ, ı, İ, ö, ş, ü`), symbols, and emojis via Win32 `KEYEVENTF_UNICODE`.
   * Modifier key engine (`CTRL`, `ALT`, `SHIFT`, `WIN`) supporting sticky and locked states.
-  * Dedicated function row (F1–F12) and special navigation keys (`ESC`, `ENTER`, `TAB`, `BACKSPACE`, arrows, `HOME`, `END`, `PAGE UP/DOWN`).
-  * Quick Windows shortcuts (`Ctrl+C`, `Ctrl+V`, `Alt+Tab`, `Win+D`, `Win+L`, `Ctrl+Shift+Esc`, etc.).
-  * Custom user-defined macro and combination creator with persistent browser storage.
-  * Disconnect safety: automatically releases all held modifier keys if connection drops.
-* **WASAPI Audio Mixer & GSMTC Media Controls (Phase 5):**
-  * **Master Volume & Mute:** Real-time bidirectional synchronization with Windows volume bar.
-  * **Per-Application Volume Mixer:** Enumerate running audio sessions (Chrome, Spotify, games, etc.) with independent volume sliders and mute toggles.
-  * **Now Playing Integration:** Real-time metadata tracking (Track Title, Artist, Album, Playback status) via Windows System Media Transport Controls (GSMTC WinRT).
-  * **Universal Media Playback:** Play/Pause, Next Track (`>>|`), Previous Track (`|<<`), and Stop with Win32 media-key fallback.
-* **Windows System Controls & Timed Shutdown (Phase 6):**
-  * **Quick System Actions:** Workstation Lock (`Win+L`), Sleep, Display Off, Task Manager, Show Desktop toggle (`Win+D`), and Screenshot.
-  * **Timed Shutdown Scheduler:** Schedule automatic shutdown or restart (e.g. 30 minutes, 1 hour, custom) with safety confirmation modals.
-  * **Live Countdown Broadcast:** Real-time remaining seconds ticker with one-click cancellation.
-* **Ultra-Low Latency Display Streamer & Screen Mirroring (Phase 7):**
-  * **Extensible 16-Byte Binary Protocol:** Transmits hardware cursor metadata, sequence numbers, and JPEG payload in a single frame.
-  * **Zero-Latency Atomic Drop-Frame Architecture:** Uses atomic frame swapping to guarantee the mobile client always receives the latest frame with zero queue buildup.
-  * **Hardware Vector Cursor Overlay:** Cursor position is rendered client-side as a crisp SVG vector, avoiding JPEG artifacts and saving bandwidth.
-  * **Zero-Obstruction Fullscreen Mobile UX:** 
-    * Fullscreen mode frees 100% of the display for Windows — no permanent overlay buttons block menus (`File`, `Edit`, `View`), close buttons, or taskbar.
-    * Slide-over Quick Controls menu (`⚙`) for Zoom, Pan, Rotation, Telemetry, and Exit.
-    * **90° Software Rotation:** One-tap widescreen orientation toggle even if iOS Portrait Lock is enabled in Control Center.
-  * **Real-Time Data Telemetry:** Live FPS counter, actual network throughput (KB/s), estimated data usage (MB/min, GB/hour), frame drops, and latency.
-  * **Bandwidth Presets:** Mobile Data Saver (540p / 8 FPS), Balanced (720p / 15 FPS), High Wi-Fi (1080p / 25 FPS), and Snapshot-on-Demand.
-  * **Remote Touch Interaction:** Single tap left-click, double tap, long-press right-click, and pan/zoom navigation.
-* **Native Windows Host Dashboard:**
-  * Sleek dark-mode Windows Forms dashboard and System Tray (`NotifyIcon`) integration.
-  * Real-time connected client monitor and live event activity log.
-  * One-click "Start with Windows" auto-boot registry integration (`HKCU\...\Run`).
-  * Quick URL and IP copying for seamless pairing.
-* **Progressive Web App (PWA):**
-  * Installable directly to iPhone Home Screen via Safari Share menu.
-  * Full-screen standalone mode with zero browser address bar distractions and safe-area notch adaptation (`orientation: any`).
+  * Function keys (F1–F12), navigation keys, and customizable macros.
+* **WASAPI Audio Mixer & GSMTC Media Controls:**
+  * Master volume slider and instant mute toggle.
+  * Per-application volume control (Chrome, Spotify, YouTube Music, Discord, etc.).
+  * Real-time metadata tracking (Track, Artist, Album) via Windows System Media Transport Controls (GSMTC).
+* **System Controls & Timed Shutdown Scheduler:**
+  * Quick workstation actions: Lock (`Win+L`), Sleep, Display Off, Task Manager, Show Desktop (`Win+D`), Screenshot.
+  * Scheduled shutdown or restart timer with confirmation modal and live countdown.
+* **Low-Latency Screen Mirroring & Display Streamer:**
+  * Latest-frame-wins architecture with atomic swapping (no unbounded frame queuing).
+  * Hardware SVG vector cursor overlay rendered on client side for razor-sharp fidelity without JPEG artifacts.
+  * Hardware-accelerated image decoding using `createImageBitmap` on supported browsers.
+  * Zero-obstruction fullscreen mode with 90° rotation support for landscape viewing.
+  * Comprehensive in-app telemetry breakdown (Capture, Encode, Send, Client Decode, RTT, Dropped Frames).
+* **Native Windows Tray & Dashboard:**
+  * Dark-mode dashboard showing current pairing PIN, connected devices, active sessions, and live logs.
+  * Device revocation button to instantly invalidate compromised tokens.
+  * Automatic boot option ("Start with Windows").
 
 ---
 
@@ -67,10 +92,11 @@ Production-quality, ultra low-latency, zero-cloud PC remote control platform for
 │                                 │                                              │                                  │
 │  • React 19 + TypeScript + Vite │      HTTP:52520 (PWA bundle & Snapshot)      │  • ASP.NET Core Kestrel Host     │
 │  • Zustand State Management     │                                              │  • AgentWebSocketManager         │
-│  • Binary Frame Decoder         │      WS:52520/ws (JSON commands & events)    │  • WindowsInputSimulator (Win32) │
-│  • SVG Vector Cursor Overlay    │ ◄──────────────────────────────────────────► │  • WASAPI & GSMTC Media Engine   │
-│  • iOS Safe-Area & Fullscreen   │      WS:52520/ws (16-byte binary screen)     │  • ScreenStreamCoordinator (GDI) │
-│  • iOS Vibration Haptics        │ ◄─────────────────────────────────────────── │  • System Tray & Dashboard       │
+│  • Binary Frame Decoder         │      WS:52520/ws (Authenticated JSON RPC)    │  • PairingManager (PIN & Tokens) │
+│  • SVG Vector Cursor Overlay    │ ◄──────────────────────────────────────────► │  • ConnectionRateLimiter         │
+│  • RequestAnimationFrame Coalesc│      WS:52520/ws (16-byte binary screen)     │  • WindowsInputSimulator (Win32) │
+│  • Safe-Area & Fullscreen       │ ◄─────────────────────────────────────────── │  • ScreenStreamCoordinator (GDI) │
+│  • iOS Vibration Haptics        │                                              │  • WASAPI & GSMTC Media Engine   │
 └─────────────────────────────────┘                                              └──────────────────────────────────┘
 ```
 
@@ -78,96 +104,61 @@ Production-quality, ultra low-latency, zero-cloud PC remote control platform for
 
 ## ⚡ Quick Start
 
-### 1. Prerequisites
-* **Windows 10 / 11** (64-bit)
-* [.NET 9.0 SDK](https://dotnet.microsoft.com/download/dotnet/9.0) (for building from source)
-* [Node.js 20+](https://nodejs.org/) (for client development)
+### 1. Run on Windows
+1. Double-click `Remote Control.lnk` or run `start-agent.bat`.
+2. The agent dashboard will open and display your local IP and a 6-digit **Pairing PIN**.
 
-### 2. Run Directly on Windows
-1. Double-click **`Remote Control.lnk`** on your Desktop or run [start-agent.bat](file:///start-agent.bat).
-2. The agent dashboard will open and appear in your Windows System Tray (near the clock).
-3. Check the **"Start with Windows"** box if you'd like the agent to automatically run in the background whenever your PC boots.
-
-### 3. Connect from iPhone
-1. Ensure your iPhone is connected to the **same Wi-Fi network** as your PC.
-2. Open **Safari** and navigate to the address shown on the Windows Dashboard:
+### 2. Connect from iPhone
+1. Ensure your iPhone is connected to the same Wi-Fi network.
+2. Open Safari and navigate to:
    ```
    http://<YOUR_PC_LOCAL_IP>:52520
    ```
-3. Tap the **Share** button in Safari and choose **"Add to Home Screen"** (*Ana Ekrana Ekle*).
-4. Launch the app from your home screen for a full-screen, native-feeling remote control experience!
+3. Enter the 6-digit Pairing PIN shown on your PC dashboard.
+4. Tap **Share** → **"Add to Home Screen"** (*Ana Ekrana Ekle*) to install as a standalone PWA.
 
 ---
 
-## 🛠️ Building from Source
+## 🛠️ Building & Verification
 
-### Clone the Repository
+### Build Client
 ```bash
-git clone https://github.com/ardauca/remote-control-suite.git
-cd remote-control-suite
-```
-
-### Build Client & Host
-```bash
-# 1. Build the React PWA frontend (outputs directly to server's wwwroot)
 cd client
 npm install
 npm run build
+```
 
-# 2. Build and run the Windows Agent
+### Build & Run Windows Host
+```bash
 cd ../server/RemoteAgent
 dotnet build
 dotnet run
 ```
 
-### Publish Self-Contained Release
+### Publish Self-Contained Binary
 ```bash
 dotnet publish server/RemoteAgent/RemoteAgent.csproj -c Release -o publish
 ```
 
----
-
-## 🧪 Automated Verification Suite
-
-Run automated integration and protocol tests while the Windows agent is active:
-
+### Automated Test Suite
 ```bash
-# Verify Health HTTP endpoint and PWA bundle serving
-node scripts/verify-phase1.js
+# 1. Verify Authentication, Security & Capability Enforcement
+node scripts/verify-auth-security.js
 
-# Verify WebSocket handshake and ping/pong latency
-node scripts/verify-websocket.js
+# 2. Verify Token-Bucket Rate Limiting Under Rapid Burst
+node scripts/verify-rate-limiting.js
 
-# Verify Win32 mouse cursor movement and scrolling
-node scripts/verify-mouse.js
+# 3. Benchmark Screen Streaming Latency, Frame Rates & Bandwidth
+node scripts/benchmark-screen.js
 
-# Verify Unicode text injection, special keys, shortcuts, and safety release
-node scripts/verify-keyboard.js
-
-# Verify Windows WASAPI master volume, application mixer, and GSMTC media control
-node scripts/verify-media-volume.js
-
-# Verify Windows power management, timed shutdown scheduler, and system controls
-node scripts/verify-power.js
-
-# Verify display streamer, binary frames, 1080p snapshot, telemetry, and remote touch
+# 4. Verify Display Streamer & Snapshot Endpoint
 node scripts/verify-screen.js
+
+# 5. Verify Core Health API & PWA Serving
+node scripts/verify-phase1.js
 ```
 
 ---
 
-## 🗺️ Roadmap & Phases
-
-- [x] **Phase 0:** Architecture, protocol specification v1, and threat model.
-- [x] **Phase 1:** Core .NET 9 Kestrel agent, System Tray, React 19 PWA, heartbeat & auto-reconnect.
-- [x] **Phase 3:** High-precision relative mouse control, multi-touch gestures, drag lock, and haptics.
-- [x] **Phase 4:** Virtual keyboard, Unicode text input, modifier engine, quick shortcuts, custom macros.
-- [x] **Phase 5:** Windows Media Control & Volume Mixer (WASAPI & GSMTC session integration).
-- [x] **Phase 6:** Windows System Controls & Timed Shutdown (Power/Sleep/Lock, Task Manager, Timed Shutdown Scheduler).
-- [x] **Phase 7:** Display Streamer, Ultra-Low Latency Screen Mirroring & Zero-Obstruction Mobile UX.
-
----
-
 ## 📄 License
-
 This project is licensed under the [MIT License](LICENSE).

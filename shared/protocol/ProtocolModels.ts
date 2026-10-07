@@ -99,3 +99,29 @@ export interface MediaNowPlayingPayload {
   isPlaying: boolean;
   sourceApp?: string;
 }
+
+// Auth & Security
+export interface AuthPairPayload {
+  pin: string;
+  deviceName?: string;
+}
+
+export interface AuthLoginPayload {
+  token: string;
+}
+
+export interface AuthResultPayload {
+  authenticated: boolean;
+  token?: string;
+  deviceId?: string;
+  deviceName?: string;
+  capabilities?: string[];
+  message: string;
+}
+
+export interface AuthStatusPayload {
+  authenticated: boolean;
+  deviceId?: string;
+  deviceName?: string;
+  capabilities?: string[];
+}

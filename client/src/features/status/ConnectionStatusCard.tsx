@@ -136,6 +136,29 @@ export const ConnectionStatusCard: React.FC = () => {
           </div>
         )}
 
+        {/* Security & Pairing Status Banner */}
+        <div className="pt-2 border-t border-slate-800/60 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <div className={`w-2 h-2 rounded-full ${useConnectionStore.getState().isAuthenticated ? 'bg-emerald-400' : 'bg-amber-400'}`} />
+            <span className="text-xs text-slate-300">
+              {useConnectionStore.getState().isAuthenticated 
+                ? `Authorized (${useConnectionStore.getState().deviceName || 'Paired Device'})` 
+                : 'Unpaired (PIN Required)'}
+            </span>
+          </div>
+          {useConnectionStore.getState().isAuthenticated && (
+            <button
+              onClick={() => {
+                useConnectionStore.getState().clearAuth();
+                wsClient.disconnect();
+              }}
+              className="text-[11px] text-rose-400 hover:text-rose-300 underline"
+            >
+              Unpair
+            </button>
+          )}
+        </div>
+
         {/* Quick Actions */}
         <div className="flex items-center gap-2 pt-1">
           {status === 'connected' ? (

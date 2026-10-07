@@ -39,9 +39,11 @@ public static class ActionTypes
     public const string PowerRequestStatus = "power.requestStatus";
     public const string PowerStatus = "power.status";
 
-    // Auth & Pairing (WAN Security)
+    // Auth & Pairing (WAN & LAN Security)
+    public const string AuthPair = "auth.pair";
     public const string AuthLogin = "auth.login";
     public const string AuthResult = "auth.result";
+    public const string AuthStatus = "auth.status";
 
     // Screen Mirroring & Stream (Phase 7)
     public const string ScreenStart = "screen.start";

@@ -11,6 +11,8 @@ public class WindowsInputSimulator : IInputSimulator
 
     // Track keys held per connection: connectionId -> (vk -> pressTime)
     private readonly ConcurrentDictionary<string, ConcurrentDictionary<byte, DateTime>> _connectionKeys = new();
+    // Track mouse buttons held per connection: connectionId -> (buttonName -> byte dummy)
+    private readonly ConcurrentDictionary<string, ConcurrentDictionary<string, byte>> _connectionMouseButtons = new();
     // Track total active count per key across all connections
     private readonly ConcurrentDictionary<byte, int> _activeKeyRefCounts = new();
     private readonly System.Threading.Timer _staleKeyTimer;
@@ -124,9 +126,16 @@ public class WindowsInputSimulator : IInputSimulator
         NativeMethods.SetCursorPos(x, y);
     }
 
-    public void MouseDown(string button)
+    public void MouseDown(string button, string? connectionId = null)
     {
-        uint flag = button.ToLowerInvariant() switch
+        string normBtn = button?.ToLowerInvariant() ?? "left";
+        if (!string.IsNullOrEmpty(connectionId))
+        {
+            var btnMap = _connectionMouseButtons.GetOrAdd(connectionId, _ => new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase));
+            btnMap[normBtn] = 1;
+        }
+
+        uint flag = normBtn switch
         {
             "right" => (uint)NativeMethods.MouseEventFlags.RIGHTDOWN,
             "middle" => (uint)NativeMethods.MouseEventFlags.MIDDLEDOWN,
@@ -135,9 +144,15 @@ public class WindowsInputSimulator : IInputSimulator
         NativeMethods.mouse_event(flag, 0, 0, 0, UIntPtr.Zero);
     }
 
-    public void MouseUp(string button)
+    public void MouseUp(string button, string? connectionId = null)
     {
-        uint flag = button.ToLowerInvariant() switch
+        string normBtn = button?.ToLowerInvariant() ?? "left";
+        if (!string.IsNullOrEmpty(connectionId) && _connectionMouseButtons.TryGetValue(connectionId, out var btnMap))
+        {
+            btnMap.TryRemove(normBtn, out _);
+        }
+
+        uint flag = normBtn switch
         {
             "right" => (uint)NativeMethods.MouseEventFlags.RIGHTUP,
             "middle" => (uint)NativeMethods.MouseEventFlags.MIDDLEUP,
@@ -290,6 +305,7 @@ public class WindowsInputSimulator : IInputSimulator
     {
         if (string.IsNullOrEmpty(connectionId)) return;
 
+        // Release keyboard keys held by this connection
         if (_connectionKeys.TryRemove(connectionId, out var heldKeys))
         {
             foreach (var vk in heldKeys.Keys)
@@ -301,6 +317,16 @@ public class WindowsInputSimulator : IInputSimulator
                 }
             }
             _logger.LogInformation("Released {Count} held keys for disconnected client {ConnectionId}", heldKeys.Count, connectionId);
+        }
+
+        // Release mouse buttons held by this connection
+        if (_connectionMouseButtons.TryRemove(connectionId, out var heldButtons))
+        {
+            foreach (var btn in heldButtons.Keys)
+            {
+                MouseUp(btn);
+            }
+            _logger.LogInformation("Released {Count} held mouse buttons for disconnected client {ConnectionId}", heldButtons.Count, connectionId);
         }
     }
 
@@ -375,6 +401,7 @@ public class WindowsInputSimulator : IInputSimulator
     public void ReleaseAllKeys()
     {
         _connectionKeys.Clear();
+        _connectionMouseButtons.Clear();
         _activeKeyRefCounts.Clear();
 
         // 1. Unconditionally release critical modifiers to prevent sticky keys
@@ -384,10 +411,12 @@ public class WindowsInputSimulator : IInputSimulator
             NativeMethods.keybd_event(mod, 0, NativeMethods.KEYEVENTF_KEYUP, UIntPtr.Zero);
         }
 
-        // 2. Also release left mouse button if locked
+        // 2. Unconditionally release all mouse buttons if locked
         NativeMethods.mouse_event((uint)NativeMethods.MouseEventFlags.LEFTUP, 0, 0, 0, UIntPtr.Zero);
+        NativeMethods.mouse_event((uint)NativeMethods.MouseEventFlags.RIGHTUP, 0, 0, 0, UIntPtr.Zero);
+        NativeMethods.mouse_event((uint)NativeMethods.MouseEventFlags.MIDDLEUP, 0, 0, 0, UIntPtr.Zero);
 
-        _logger.LogInformation("All remote held keys and modifiers released safely.");
+        _logger.LogInformation("All remote held keys, mouse buttons, and modifiers released safely.");
     }
 
     private static NativeMethods.INPUT CreateKeyInput(byte vk, bool isKeyUp, bool isExtended)

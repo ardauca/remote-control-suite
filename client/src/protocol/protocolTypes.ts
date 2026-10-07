@@ -126,13 +126,29 @@ export interface PowerStatusPayload {
 }
 
 // Auth & Security
+export interface AuthPairPayload {
+  pin: string;
+  deviceName?: string;
+}
+
 export interface AuthLoginPayload {
   token: string;
 }
 
 export interface AuthResultPayload {
   authenticated: boolean;
+  token?: string;
+  deviceId?: string;
+  deviceName?: string;
+  capabilities?: string[];
   message: string;
+}
+
+export interface AuthStatusPayload {
+  authenticated: boolean;
+  deviceId?: string;
+  deviceName?: string;
+  capabilities?: string[];
 }
 
 // Screen Mirroring & Stream (Phase 7)
@@ -158,6 +174,7 @@ export interface ScreenTelemetryPayload {
   estimatedGbPerHour: number;
   queueDepth: number;
   captureDurationMs: number;
+  encodeDurationMs?: number;
   sendDurationMs: number;
 }
 

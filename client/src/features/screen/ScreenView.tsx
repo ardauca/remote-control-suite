@@ -122,8 +122,13 @@ export const ScreenView: React.FC = () => {
     };
   }, [updateAspectBox, isFullscreen, isRotated90]);
 
+  const [clientDecodeMs, setClientDecodeMs] = useState<number>(0);
+  const desktopDimsRef = useRef<{ width: number; height: number }>({ width: 1920, height: 1080 });
+  const latency = useConnectionStore((s) => s.latency);
+
   // 1. Binary Frame Processing Loop
   const handleBinaryFrame = useCallback((buffer: ArrayBuffer) => {
+    const decodeStart = performance.now();
     const frame = decodeBinaryFrame(buffer);
     if (!frame) return;
 
@@ -133,7 +138,8 @@ export const ScreenView: React.FC = () => {
     }
     lastSeqRef.current = frame.sequenceNumber;
 
-    if (desktopDims.width !== frame.desktopWidth || desktopDims.height !== frame.desktopHeight) {
+    if (desktopDimsRef.current.width !== frame.desktopWidth || desktopDimsRef.current.height !== frame.desktopHeight) {
+      desktopDimsRef.current = { width: frame.desktopWidth, height: frame.desktopHeight };
       setDesktopDims({ width: frame.desktopWidth, height: frame.desktopHeight });
     }
 
@@ -143,67 +149,125 @@ export const ScreenView: React.FC = () => {
       visible: frame.cursorVisible
     });
 
-    // Render image to canvas
-    const img = new Image();
-    const url = URL.createObjectURL(frame.imageBlob);
-    img.onload = () => {
-      const canvas = canvasRef.current;
-      if (canvas) {
-        if (canvas.width !== img.naturalWidth || canvas.height !== img.naturalHeight) {
-          canvas.width = img.naturalWidth;
-          canvas.height = img.naturalHeight;
+    // Hardware-accelerated decode via createImageBitmap or Image fallback
+    if (typeof createImageBitmap === 'function') {
+      createImageBitmap(frame.imageBlob).then((bmp) => {
+        const canvas = canvasRef.current;
+        if (canvas) {
+          if (canvas.width !== bmp.width || canvas.height !== bmp.height) {
+            canvas.width = bmp.width;
+            canvas.height = bmp.height;
+          }
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            ctx.drawImage(bmp, 0, 0);
+          }
         }
-        const ctx = canvas.getContext('2d');
-        if (ctx) {
-          ctx.drawImage(img, 0, 0);
-        }
-      }
-      URL.revokeObjectURL(url);
-    };
-    img.src = url;
-  }, [desktopDims.width, desktopDims.height]);
-
-  // 2. Lifecycle: Start on mount, stop on unmount, handle visibility
-  useEffect(() => {
-    const unregister = wsClient.onBinary(handleBinaryFrame);
-
-    if (activePreset !== 'snapshot') {
-      startStream();
+        bmp.close();
+        setClientDecodeMs(Math.round(performance.now() - decodeStart));
+      }).catch(() => {
+        // Fallback or ignore cancelled bitmap
+      });
     } else {
-      requestSnapshot();
+      const img = new Image();
+      const url = URL.createObjectURL(frame.imageBlob);
+      img.onload = () => {
+        const canvas = canvasRef.current;
+        if (canvas) {
+          if (canvas.width !== img.naturalWidth || canvas.height !== img.naturalHeight) {
+            canvas.width = img.naturalWidth;
+            canvas.height = img.naturalHeight;
+          }
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            ctx.drawImage(img, 0, 0);
+          }
+        }
+        URL.revokeObjectURL(url);
+        setClientDecodeMs(Math.round(performance.now() - decodeStart));
+      };
+      img.onerror = () => {
+        URL.revokeObjectURL(url);
+      };
+      img.src = url;
+    }
+  }, []);
+
+  // Persistent binary handler ref
+  const handleBinaryFrameRef = useRef(handleBinaryFrame);
+  handleBinaryFrameRef.current = handleBinaryFrame;
+
+  // 2. Stable binary subscription: registered ONCE on mount, unregistered on unmount
+  useEffect(() => {
+    const unregister = wsClient.onBinary((buf) => {
+      handleBinaryFrameRef.current(buf);
+    });
+    return () => {
+      unregister();
+    };
+  }, []);
+
+  // 3. Stream lifecycle: Start on mount, stop ONLY on unmount
+  useEffect(() => {
+    lastSeqRef.current = 0;
+    const store = useScreenStore.getState();
+    if (store.activePreset !== 'snapshot') {
+      store.startStream();
+    } else {
+      store.requestSnapshot();
     }
 
+    return () => {
+      useScreenStore.getState().stopStream();
+      if (longPressTimerRef.current) window.clearTimeout(longPressTimerRef.current);
+    };
+  }, []);
+
+  // 4. Mobile visibility watcher: Avoid immediate pause during iOS gesture / address bar transitions
+  useEffect(() => {
+    let hideTimer: number | null = null;
     const handleVisibility = () => {
       if (document.visibilityState === 'hidden') {
-        stopStream();
-      } else if (document.visibilityState === 'visible' && activePreset !== 'snapshot') {
-        startStream();
+        hideTimer = window.setTimeout(() => {
+          if (useScreenStore.getState().isStreaming) {
+            useScreenStore.getState().stopStream();
+          }
+        }, 20000); // 20s grace period for Safari toolbar shifts and quick app glances
+      } else if (document.visibilityState === 'visible') {
+        if (hideTimer) {
+          window.clearTimeout(hideTimer);
+          hideTimer = null;
+        }
+        const state = useScreenStore.getState();
+        if (!state.isStreaming && state.activePreset !== 'snapshot') {
+          lastSeqRef.current = 0;
+          state.startStream();
+        }
       }
     };
 
     document.addEventListener('visibilitychange', handleVisibility);
-
     return () => {
-      unregister();
+      if (hideTimer) window.clearTimeout(hideTimer);
       document.removeEventListener('visibilitychange', handleVisibility);
-      stopStream();
-      if (longPressTimerRef.current) window.clearTimeout(longPressTimerRef.current);
     };
-  }, [handleBinaryFrame, startStream, stopStream, requestSnapshot, activePreset]);
+  }, []);
 
-  // Re-start screen streaming automatically if connection drops and reconnects
+  // 5. Re-start screen streaming automatically if connection drops and reconnects
   const connectionStatus = useConnectionStore((s) => s.status);
   const prevStatusRef = useRef(connectionStatus);
   useEffect(() => {
     if (prevStatusRef.current !== 'connected' && connectionStatus === 'connected') {
-      if (activePreset !== 'snapshot') {
-        startStream();
+      lastSeqRef.current = 0;
+      const store = useScreenStore.getState();
+      if (store.activePreset !== 'snapshot') {
+        store.startStream();
       } else {
-        requestSnapshot();
+        store.requestSnapshot();
       }
     }
     prevStatusRef.current = connectionStatus;
-  }, [connectionStatus, activePreset, startStream, requestSnapshot]);
+  }, [connectionStatus]);
 
   // Pan Boundary Clamper
   const clampPan = (newX: number, newY: number, curZoom: number) => {
@@ -399,6 +463,7 @@ export const ScreenView: React.FC = () => {
     if (isStreaming) {
       stopStream();
     } else {
+      lastSeqRef.current = 0;
       startStream();
     }
   };
@@ -819,22 +884,30 @@ export const ScreenView: React.FC = () => {
 
             {/* Collapsible Details */}
             {showNormalTelemetry && (
-              <div className="grid grid-cols-4 gap-1.5 pt-2.5 mt-2 border-t border-slate-800 text-center font-mono animate-fadeIn">
-                <div className="bg-dark-900 rounded-lg p-1.5 border border-slate-800">
-                  <div className="text-[9px] text-slate-500">Kuyruk</div>
-                  <div className="text-xs font-bold text-slate-300">{telemetry?.queueDepth ?? 0}</div>
-                </div>
-                <div className="bg-dark-900 rounded-lg p-1.5 border border-slate-800">
-                  <div className="text-[9px] text-slate-500">Atlanan</div>
-                  <div className="text-xs font-bold text-rose-400">{telemetry?.droppedFrames ?? 0}</div>
-                </div>
+              <div className="grid grid-cols-3 sm:grid-cols-6 gap-1.5 pt-2.5 mt-2 border-t border-slate-800 text-center font-mono animate-fadeIn">
                 <div className="bg-dark-900 rounded-lg p-1.5 border border-slate-800">
                   <div className="text-[9px] text-slate-500">Yakalama</div>
                   <div className="text-xs font-bold text-slate-300">{telemetry?.captureDurationMs ?? 0}ms</div>
                 </div>
                 <div className="bg-dark-900 rounded-lg p-1.5 border border-slate-800">
+                  <div className="text-[9px] text-slate-500">Kodlama</div>
+                  <div className="text-xs font-bold text-slate-300">{telemetry?.encodeDurationMs ?? 0}ms</div>
+                </div>
+                <div className="bg-dark-900 rounded-lg p-1.5 border border-slate-800">
                   <div className="text-[9px] text-slate-500">Gönderme</div>
                   <div className="text-xs font-bold text-slate-300">{telemetry?.sendDurationMs ?? 0}ms</div>
+                </div>
+                <div className="bg-dark-900 rounded-lg p-1.5 border border-slate-800">
+                  <div className="text-[9px] text-slate-500">Çözme</div>
+                  <div className="text-xs font-bold text-cyan-400">{clientDecodeMs}ms</div>
+                </div>
+                <div className="bg-dark-900 rounded-lg p-1.5 border border-slate-800">
+                  <div className="text-[9px] text-slate-500">RTT</div>
+                  <div className="text-xs font-bold text-slate-300">{latency}ms</div>
+                </div>
+                <div className="bg-dark-900 rounded-lg p-1.5 border border-slate-800">
+                  <div className="text-[9px] text-slate-500">Atlanan</div>
+                  <div className="text-xs font-bold text-rose-400">{telemetry?.droppedFrames ?? 0}</div>
                 </div>
               </div>
             )}

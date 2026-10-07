@@ -58,14 +58,39 @@ public static class Program
         builder.Services.AddSingleton<Platform.SystemControl.ISystemControlManager, Platform.SystemControl.WindowsSystemControlManager>();
         builder.Services.AddSingleton<Platform.Screen.IScreenCaptureEngine, Platform.Screen.GdiScreenCaptureEngine>();
         builder.Services.AddSingleton<Platform.Screen.ScreenStreamCoordinator>();
+        builder.Services.AddSingleton<Security.PairingManager>();
         builder.Services.AddSingleton<AgentWebSocketManager>();
         builder.Services.AddCors(options =>
         {
             options.AddDefaultPolicy(policy =>
             {
-                policy.AllowAnyOrigin()
-                      .AllowAnyHeader()
-                      .AllowAnyMethod();
+                policy.SetIsOriginAllowed(origin =>
+                {
+                    if (string.IsNullOrEmpty(origin)) return false;
+                    if (Uri.TryCreate(origin, UriKind.Absolute, out var uri))
+                    {
+                        var host = uri.Host;
+                        // Localhost or loopback
+                        if (host.Equals("localhost", StringComparison.OrdinalIgnoreCase) || host.Equals("127.0.0.1"))
+                            return true;
+
+                        // Private LAN ranges (RFC 1918)
+                        if (IPAddress.TryParse(host, out var ip))
+                        {
+                            var bytes = ip.GetAddressBytes();
+                            if (bytes.Length == 4)
+                            {
+                                if (bytes[0] == 10) return true; // 10.0.0.0/8
+                                if (bytes[0] == 172 && bytes[1] >= 16 && bytes[1] <= 31) return true; // 172.16.0.0/12
+                                if (bytes[0] == 192 && bytes[1] == 168) return true; // 192.168.0.0/16
+                                if (bytes[0] == 169 && bytes[1] == 254) return true; // Link-local
+                            }
+                        }
+                    }
+                    return false;
+                })
+                .AllowAnyHeader()
+                .WithMethods("GET", "POST", "OPTIONS");
             });
         });
 
@@ -129,20 +154,34 @@ public static class Program
             });
         });
 
-        // Screen Snapshot endpoint (Secured with token when configured)
-        app.MapGet("/api/screen/snapshot", (HttpContext context, Platform.Screen.ScreenStreamCoordinator coordinator, IOptions<AgentOptions> options) =>
+        // Screen Snapshot endpoint (Secured with cryptographic pairing token or Bearer header)
+        app.MapGet("/api/screen/snapshot", (
+            HttpContext context, 
+            Platform.Screen.ScreenStreamCoordinator coordinator, 
+            Security.PairingManager pairingManager, 
+            IOptions<AgentOptions> options) =>
         {
-            var configuredToken = options.Value.AuthToken;
-            if (!string.IsNullOrEmpty(configuredToken))
+            string? token = null;
+            var authHeader = context.Request.Headers["Authorization"].ToString();
+            if (!string.IsNullOrEmpty(authHeader) && authHeader.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
             {
-                var authHeader = context.Request.Headers["Authorization"].ToString();
-                var queryToken = context.Request.Query["token"].ToString();
-                bool authorized = queryToken == configuredToken || 
-                                  (!string.IsNullOrEmpty(authHeader) && authHeader.EndsWith(configuredToken, StringComparison.Ordinal));
-                if (!authorized)
-                {
-                    return Results.Unauthorized();
-                }
+                token = authHeader.Substring(7).Trim();
+            }
+            else if (context.Request.Query.TryGetValue("token", out var qToken))
+            {
+                token = qToken.ToString();
+            }
+
+            bool authorized = false;
+            if (!string.IsNullOrEmpty(token))
+            {
+                authorized = pairingManager.ValidateToken(token, out _) || 
+                             (!string.IsNullOrEmpty(options.Value.AuthToken) && token == options.Value.AuthToken);
+            }
+
+            if (!authorized)
+            {
+                return Results.Unauthorized();
             }
 
             int monitor = 0;
@@ -226,25 +265,29 @@ public static class Program
 
         // 7. Initialize Windows Forms Application & Dashboard
         ApplicationConfiguration.Initialize();
-        var mainForm = new MainDashboardForm(optionsSnapshot, wsManager, appLifetime);
+        var pairingManager = app.Services.GetRequiredService<Security.PairingManager>();
+        var mainForm = new MainDashboardForm(optionsSnapshot, wsManager, pairingManager, appLifetime);
 
-        // Start Kestrel in background
-        _ = Task.Run(async () =>
+        // Start Kestrel web host synchronously before opening UI
+        try
         {
-            try
+            app.StartAsync().GetAwaiter().GetResult();
+            var localIps = SystemInfoHelper.GetLocalIpAddresses();
+            foreach (var ip in localIps)
             {
-                await app.StartAsync();
-                var localIps = SystemInfoHelper.GetLocalIpAddresses();
-                foreach (var ip in localIps)
-                {
-                    logger.LogInformation("Agent reachable at: http://{Ip}:{Port}", ip, agentOptions.Port);
-                }
+                logger.LogInformation("Agent reachable at: http://{Ip}:{Port}", ip, agentOptions.Port);
             }
-            catch (Exception ex)
-            {
-                logger.LogError(ex, "Error starting Kestrel Web Host.");
-            }
-        });
+        }
+        catch (Exception ex)
+        {
+            logger.LogCritical(ex, "Failed to start Kestrel Web Host on port {Port}.", agentOptions.Port);
+            MessageBox.Show(
+                $"Failed to bind server to port {agentOptions.Port}:\n\n{ex.Message}\n\nPlease check if another process is using port {agentOptions.Port}.",
+                "Server Startup Error",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Error);
+            return 1;
+        }
 
         // Run UI Event Loop on Main Thread
         Application.Run(mainForm);

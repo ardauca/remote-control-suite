@@ -1,10 +1,40 @@
-import { MessageEnvelope, ServerHelloPayload, PongPayload, VolumeStatePayload, MediaNowPlayingPayload, PowerStatusPayload, ScreenTelemetryPayload } from './protocolTypes';
+import { 
+  MessageEnvelope, 
+  ServerHelloPayload, 
+  PongPayload, 
+  VolumeStatePayload, 
+  MediaNowPlayingPayload, 
+  PowerStatusPayload, 
+  ScreenTelemetryPayload,
+  AuthResultPayload,
+  ErrorPayload
+} from './protocolTypes';
 import { useConnectionStore } from '../stores/connectionStore';
 import { useMediaStore } from '../stores/mediaStore';
 import { usePowerStore } from '../stores/powerStore';
 import { useScreenStore } from '../stores/screenStore';
 
 type MessageHandler = (envelope: MessageEnvelope) => void;
+
+function generateUUID(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
+    const bytes = new Uint8Array(16);
+    crypto.getRandomValues(bytes);
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    return [...bytes]
+      .map((b, i) => (i === 4 || i === 6 || i === 8 || i === 10 ? '-' : '') + b.toString(16).padStart(2, '0'))
+      .join('');
+  }
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    const v = c === 'x' ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
+}
 
 class WebSocketClient {
   private socket: WebSocket | null = null;
@@ -75,6 +105,7 @@ class WebSocketClient {
     useConnectionStore.getState().setStatus('disconnected');
     useConnectionStore.getState().setServerInfo(null);
     useConnectionStore.getState().setLatency(0);
+    useConnectionStore.getState().setAuthenticated(false);
     useConnectionStore.getState().addLog('info', 'Disconnected by user.');
   }
 
@@ -90,7 +121,7 @@ class WebSocketClient {
 
     const envelope: MessageEnvelope<T> = {
       version: 1,
-      id: Math.random().toString(36).substring(2, 11),
+      id: generateUUID(),
       type,
       action,
       payload,
@@ -102,6 +133,18 @@ class WebSocketClient {
     } catch (err) {
       useConnectionStore.getState().addLog('error', `Send error for ${action}: ${err}`);
     }
+  }
+
+  public pair(pin: string, deviceName?: string) {
+    const cleanPin = pin.replace(/\D/g, '');
+    const cleanName = deviceName || (typeof navigator !== 'undefined' && navigator.userAgent ? 'iPhone Safari' : 'Web Client');
+    useConnectionStore.getState().addLog('info', `Sending pairing request for ${cleanName}...`);
+    this.send('command', 'auth.pair', { pin: cleanPin, deviceName: cleanName });
+  }
+
+  public login(token: string) {
+    if (!token) return;
+    this.send('command', 'auth.login', { token });
   }
 
   public on(action: string, handler: MessageHandler) {
@@ -143,19 +186,52 @@ class WebSocketClient {
       }
 
       const envelope = JSON.parse(event.data) as MessageEnvelope;
+      const store = useConnectionStore.getState();
 
       // Built-in protocol actions
       if (envelope.action === 'system.hello') {
         const hello = envelope.payload as ServerHelloPayload;
-        useConnectionStore.getState().setServerInfo(hello);
-        useConnectionStore.getState().addLog('info', `Host identified: ${hello.serverName} (${hello.os})`);
+        store.setServerInfo(hello);
+        store.addLog('info', `Host identified: ${hello.serverName} (${hello.os})`);
+
+        // If we have a saved auth token, authenticate automatically
+        if (store.authToken) {
+          store.addLog('info', 'Authenticating with saved session token...');
+          this.login(store.authToken);
+        } else {
+          store.setAuthenticated(false);
+        }
+      } else if (envelope.action === 'auth.result') {
+        const res = envelope.payload as AuthResultPayload;
+        if (res.authenticated) {
+          if (res.token) {
+            store.setAuthToken(res.token);
+          }
+          store.setAuthenticated(true, res.capabilities, res.deviceId, res.deviceName);
+          store.addLog('success', res.message || 'Device authenticated successfully!');
+        } else {
+          store.setAuthenticated(false);
+          store.setAuthError(res.message);
+          store.addLog('warn', res.message || 'Authentication failed. Please pair device.');
+        }
+      } else if (envelope.action === 'system.error') {
+        const err = envelope.payload as ErrorPayload;
+        if (err.code === 'UNAUTHORIZED') {
+          store.setAuthenticated(false);
+          store.setAuthError(err.message || 'Authentication required');
+          store.addLog('error', `Security: ${err.message}`);
+        } else if (err.code === 'RATE_LIMITED') {
+          store.addLog('warn', `Rate limited: ${err.message}`);
+        } else {
+          store.addLog('warn', `Server error (${err.code}): ${err.message}`);
+        }
       } else if (envelope.action === 'system.pong') {
         const pong = envelope.payload as PongPayload;
         const now = Date.now();
         this.lastPongTime = now;
         const rtt = Math.max(0, now - pong.clientTime);
-        useConnectionStore.getState().setLatency(rtt);
-        useConnectionStore.getState().setLastHeartbeat(now);
+        store.setLatency(rtt);
+        store.setLastHeartbeat(now);
       } else if (envelope.action === 'volume.state') {
         const vol = envelope.payload as VolumeStatePayload;
         useMediaStore.getState().setVolumeState(vol);
@@ -181,11 +257,14 @@ class WebSocketClient {
   }
 
   private handleClose(event: CloseEvent) {
-    useConnectionStore.getState().setStatus('disconnected');
-    useConnectionStore.getState().addLog('warn', `Connection closed (Code: ${event.code})`);
-    this.cleanup();
+    this.stopHeartbeat();
+    const store = useConnectionStore.getState();
+    store.setLatency(0);
 
-    if (!this.isManuallyClosed) {
+    if (this.isManuallyClosed) {
+      store.setStatus('disconnected');
+    } else {
+      store.addLog('warn', `WebSocket closed (code: ${event.code}, reason: ${event.reason || 'None'}). Scheduling reconnect...`);
       this.scheduleReconnect();
     }
   }
@@ -264,7 +343,7 @@ class WebSocketClient {
       try {
         this.socket.close();
       } catch {
-        // Ignore
+        // ignore
       }
       this.socket = null;
     }

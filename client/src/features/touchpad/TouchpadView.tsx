@@ -83,6 +83,26 @@ export const TouchpadView: React.FC = () => {
     setTouchPos({ x: relX, y: relY });
   }, []);
 
+  const pendingDxRef = useRef(0);
+  const pendingDyRef = useRef(0);
+  const rafIdRef = useRef<number | null>(null);
+
+  const flushMouseMove = useCallback(() => {
+    if (rafIdRef.current !== null) {
+      cancelAnimationFrame(rafIdRef.current);
+      rafIdRef.current = null;
+    }
+    const sendDx = Math.round(pendingDxRef.current);
+    const sendDy = Math.round(pendingDyRef.current);
+    pendingDxRef.current = 0;
+    pendingDyRef.current = 0;
+
+    if (sendDx !== 0 || sendDy !== 0) {
+      wsClient.send('command', 'mouse.move', { dx: sendDx, dy: sendDy });
+      setEventCount((c) => c + 1);
+    }
+  }, []);
+
   // Pointer Move
   const handlePointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     e.preventDefault();
@@ -94,7 +114,7 @@ export const TouchpadView: React.FC = () => {
     const rect = e.currentTarget.getBoundingClientRect();
     setTouchPos({ x: e.clientX - rect.left, y: e.clientY - rect.top });
 
-    // 1 Finger -> Mouse Movement
+    // 1 Finger -> Mouse Movement (Coalesced via requestAnimationFrame)
     if (pointers.size === 1) {
       const dxRaw = e.clientX - stateRef.current.lastX;
       const dyRaw = e.clientY - stateRef.current.lastY;
@@ -112,12 +132,22 @@ export const TouchpadView: React.FC = () => {
           dy *= mult;
         }
 
-        const finalDx = Math.round(dx);
-        const finalDy = Math.round(dy);
+        pendingDxRef.current += dx;
+        pendingDyRef.current += dy;
 
-        if (finalDx !== 0 || finalDy !== 0) {
-          wsClient.send('command', 'mouse.move', { dx: finalDx, dy: finalDy });
-          setEventCount((c) => c + 1);
+        if (rafIdRef.current === null) {
+          rafIdRef.current = requestAnimationFrame(() => {
+            rafIdRef.current = null;
+            const sendDx = Math.round(pendingDxRef.current);
+            const sendDy = Math.round(pendingDyRef.current);
+            pendingDxRef.current = 0;
+            pendingDyRef.current = 0;
+
+            if (sendDx !== 0 || sendDy !== 0) {
+              wsClient.send('command', 'mouse.move', { dx: sendDx, dy: sendDy });
+              setEventCount((c) => c + 1);
+            }
+          });
         }
       }
 
@@ -167,10 +197,13 @@ export const TouchpadView: React.FC = () => {
       }
     }
 
+    // Flush any pending coalesced movement
+    flushMouseMove();
+
     if (stateRef.current.activePointers.size === 0) {
       setTouchPos(null);
     }
-  }, []);
+  }, [flushMouseMove]);
 
   return (
     <div className="flex flex-col h-full w-full select-none overflow-hidden space-y-2">

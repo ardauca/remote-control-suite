@@ -145,7 +145,7 @@ public class ScreenStreamCoordinator : IDisposable
 
                     foreach (var session in group)
                     {
-                        session.PostLatestFrame(packedPacket, frame.CaptureDurationMs);
+                        session.PostLatestFrame(packedPacket, frame.CaptureDurationMs, frame.EncodeDurationMs);
                     }
                 }
 
@@ -172,7 +172,7 @@ public class ScreenStreamCoordinator : IDisposable
         var sendSw = new Stopwatch();
         int consecutiveFailures = 0;
 
-        while (!ct.IsCancellationRequested)
+        while (!ct.IsCancellationRequested && !session.Cts.IsCancellationRequested)
         {
             try
             {
@@ -190,11 +190,16 @@ public class ScreenStreamCoordinator : IDisposable
                 {
                     consecutiveFailures++;
                     session.RecordDropped();
-                    if (consecutiveFailures >= 5)
+
+                    // Only terminate after prolonged, continuous failure (e.g. 100 consecutive dropped frames ~10-15s)
+                    if (consecutiveFailures >= 100)
                     {
-                        _logger.LogWarning("Sender loop terminating for {ConnectionId}: 5 consecutive send failures.", session.ConnectionId);
+                        _logger.LogWarning("Sender loop terminating for {ConnectionId}: 100 consecutive send failures.", session.ConnectionId);
                         break;
                     }
+
+                    // Transient backoff to give network socket buffer time to drain
+                    await Task.Delay(30, ct);
                     continue;
                 }
 
@@ -202,6 +207,10 @@ public class ScreenStreamCoordinator : IDisposable
                 session.RecordSent(packet.Length, sendSw.ElapsedMilliseconds);
             }
             catch (OperationCanceledException)
+            {
+                break;
+            }
+            catch (ObjectDisposedException)
             {
                 break;
             }
@@ -252,6 +261,7 @@ public class ClientStreamSession : IDisposable
     private int _framesDroppedInterval;
     private long _bytesSentInterval;
     private long _lastCaptureDurationMs;
+    private long _lastEncodeDurationMs;
     private long _lastSendDurationMs;
 
     public ClientStreamSession(string connectionId, Func<byte[], CancellationToken, Task<bool>> sendFrame, ScreenStartPayload config)
@@ -266,9 +276,10 @@ public class ClientStreamSession : IDisposable
         Config = newConfig;
     }
 
-    public void PostLatestFrame(byte[] packet, long captureDurationMs)
+    public void PostLatestFrame(byte[] packet, long captureDurationMs, long encodeDurationMs)
     {
         _lastCaptureDurationMs = captureDurationMs;
+        _lastEncodeDurationMs = encodeDurationMs;
 
         // Latest frame swap: Drop any previously unconsumed frame
         var old = Interlocked.Exchange(ref LatestUnsentPacket, packet);
@@ -318,14 +329,20 @@ public class ClientStreamSession : IDisposable
             EstimatedGbPerHour = Math.Round(gbHour, 3),
             QueueDepth = LatestUnsentPacket != null ? 1 : 0,
             CaptureDurationMs = _lastCaptureDurationMs,
+            EncodeDurationMs = _lastEncodeDurationMs,
             SendDurationMs = _lastSendDurationMs
         };
     }
 
+    private bool _disposed = false;
+
     public void Dispose()
     {
-        Cts.Cancel();
-        Cts.Dispose();
-        Signal.Dispose();
+        if (_disposed) return;
+        _disposed = true;
+
+        try { Cts.Cancel(); } catch { }
+        try { Signal.Dispose(); } catch { }
+        try { Cts.Dispose(); } catch { }
     }
 }

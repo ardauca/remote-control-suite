@@ -2,36 +2,33 @@
 const http = require('http');
 
 const WS_URL = 'ws://localhost:52520/ws';
-const HTTP_URL = 'http://localhost:52520/api/screen/snapshot';
+const AUTH_TOKEN = 'test_benchmark_token_2026';
 
 function testHttpSnapshot() {
   return new Promise((resolve, reject) => {
-    http.get(HTTP_URL, (res) => {
-      if (res.statusCode !== 200) {
-        return reject(new Error(`Snapshot HTTP status: ${res.statusCode}`));
+    fetch('http://localhost:52520/api/screen/snapshot', {
+      headers: { 'Authorization': `Bearer ${AUTH_TOKEN}` }
+    }).then(async (res) => {
+      if (res.status !== 200) {
+        return reject(new Error(`Snapshot HTTP status: ${res.status}`));
       }
-      const contentType = res.headers['content-type'];
+      const contentType = res.headers.get('content-type');
       if (!contentType || !contentType.includes('image/jpeg')) {
         return reject(new Error(`Unexpected Content-Type: ${contentType}`));
       }
-
-      const chunks = [];
-      res.on('data', (chunk) => chunks.push(chunk));
-      res.on('end', () => {
-        const buffer = Buffer.concat(chunks);
-        if (buffer.length < 1000) {
-          return reject(new Error(`Snapshot image too small: ${buffer.length} bytes`));
-        }
-        // Verify JPEG magic bytes: 0xFF, 0xD8
-        if (buffer[0] !== 0xFF || buffer[1] !== 0xD8) {
-          return reject(new Error(`Invalid JPEG header: 0x${buffer[0].toString(16)}, 0x${buffer[1].toString(16)}`));
-        }
-        resolve({
-          sizeBytes: buffer.length,
-          contentType: contentType
-        });
+      const arrayBuffer = await res.arrayBuffer();
+      const buffer = Buffer.from(arrayBuffer);
+      if (buffer.length < 1000) {
+        return reject(new Error(`Snapshot image too small: ${buffer.length} bytes`));
+      }
+      if (buffer[0] !== 0xFF || buffer[1] !== 0xD8) {
+        return reject(new Error(`Invalid JPEG header: 0x${buffer[0].toString(16)}, 0x${buffer[1].toString(16)}`));
+      }
+      resolve({
+        sizeBytes: buffer.length,
+        contentType: contentType
       });
-    }).on('error', reject);
+    }).catch(reject);
   });
 }
 
@@ -45,10 +42,29 @@ function connectWs() {
       reject(new Error('Connection timeout'));
     }, 4000);
 
-    ws.onopen = () => {
-      clearTimeout(timer);
-      resolve(ws);
+    ws.onmessage = (event) => {
+      if (typeof event.data === 'string') {
+        const msg = JSON.parse(event.data);
+        if (msg.action === 'system.hello') {
+          ws.send(JSON.stringify({
+            version: 1,
+            id: crypto.randomUUID(),
+            type: 'command',
+            action: 'auth.login',
+            payload: { token: AUTH_TOKEN },
+            timestamp: Date.now()
+          }));
+        } else if (msg.action === 'auth.result') {
+          clearTimeout(timer);
+          if (msg.payload.authenticated) {
+            resolve(ws);
+          } else {
+            reject(new Error('Auth failed'));
+          }
+        }
+      }
     };
+
     ws.onerror = (err) => {
       clearTimeout(timer);
       reject(err);
