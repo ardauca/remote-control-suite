@@ -49,6 +49,10 @@ export interface MouseScrollPayload {
   dy: number;
 }
 
+export interface MouseButtonPayload {
+  button: 'left' | 'right' | 'middle';
+}
+
 // Keyboard Payloads (Phase 4)
 export interface KeyboardTextPayload {
   text: string;
@@ -125,3 +129,80 @@ export interface AuthStatusPayload {
   deviceName?: string;
   capabilities?: string[];
 }
+
+// Power & System Controls (Phase 6)
+export type PowerActionType = 
+  | 'lock' 
+  | 'sleep' 
+  | 'displayOff' 
+  | 'taskManager' 
+  | 'showDesktop' 
+  | 'taskView' 
+  | 'screenshot' 
+  | 'shutdown' 
+  | 'restart';
+
+export interface PowerActionPayload {
+  action: PowerActionType;
+}
+
+export interface PowerSchedulePayload {
+  action: 'shutdown' | 'restart';
+  timeoutSeconds: number;
+}
+
+export interface PowerStatusPayload {
+  isActive: boolean;
+  action: 'shutdown' | 'restart' | 'none';
+  totalSeconds: number;
+  remainingSeconds: number;
+  targetTimeUtc?: string;
+}
+
+// Screen Mirroring & Stream (Phase 7)
+export interface ScreenStartPayload {
+  fps: number;
+  quality: number;
+  scale: number;
+  monitorIndex: number;
+}
+
+export interface ScreenTouchPayload {
+  normX: number;
+  normY: number;
+  type: 'click' | 'double' | 'right' | 'down' | 'up' | 'move';
+  button?: 'left' | 'right' | 'middle';
+}
+
+export interface ScreenTelemetryPayload {
+  actualFps: number;
+  droppedFrames: number;
+  bytesPerSecond: number;
+  estimatedMbPerMinute: number;
+  estimatedGbPerHour: number;
+  queueDepth: number;
+  captureDurationMs: number;
+  encodeDurationMs?: number;
+  sendDurationMs: number;
+}
+
+export interface ScreenMonitorInfo {
+  index: number;
+  deviceName: string;
+  width: number;
+  height: number;
+  isPrimary: boolean;
+}
+
+export interface DecodedBinaryFrame {
+  sequenceNumber: number;
+  desktopWidth: number;
+  desktopHeight: number;
+  normCursorX: number; // 0.0 - 1.0
+  normCursorY: number; // 0.0 - 1.0
+  cursorVisible: boolean;
+  imageBlob: Blob;
+}
+
+export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'reconnecting';
+

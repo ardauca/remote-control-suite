@@ -15,6 +15,8 @@ public class WindowsInputSimulator : IInputSimulator
     private readonly ConcurrentDictionary<string, ConcurrentDictionary<string, byte>> _connectionMouseButtons = new();
     // Track total active count per key across all connections
     private readonly ConcurrentDictionary<byte, int> _activeKeyRefCounts = new();
+    // Track total active count per mouse button across all connections
+    private readonly ConcurrentDictionary<string, int> _activeMouseButtonRefCounts = new(StringComparer.OrdinalIgnoreCase);
     private readonly System.Threading.Timer _staleKeyTimer;
     private static readonly TimeSpan MaxKeyHoldDuration = TimeSpan.FromSeconds(20);
 
@@ -148,6 +150,7 @@ public class WindowsInputSimulator : IInputSimulator
             var btnMap = _connectionMouseButtons.GetOrAdd(connectionId, _ => new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase));
             btnMap[normBtn] = 1;
         }
+        _activeMouseButtonRefCounts.AddOrUpdate(normBtn, 1, (_, c) => c + 1);
 
         uint flag = normBtn switch
         {
@@ -165,6 +168,7 @@ public class WindowsInputSimulator : IInputSimulator
         {
             btnMap.TryRemove(normBtn, out _);
         }
+        _activeMouseButtonRefCounts.AddOrUpdate(normBtn, 0, (_, c) => Math.Max(0, c - 1));
 
         uint flag = normBtn switch
         {
@@ -414,23 +418,59 @@ public class WindowsInputSimulator : IInputSimulator
 
     public void ReleaseAllKeys()
     {
+        // 1. Release all tracked keyboard keys across all connections
+        foreach (var (_, heldKeys) in _connectionKeys)
+        {
+            foreach (var vk in heldKeys.Keys)
+            {
+                NativeMethods.keybd_event(vk, 0, NativeMethods.KEYEVENTF_KEYUP, UIntPtr.Zero);
+            }
+        }
         _connectionKeys.Clear();
-        _connectionMouseButtons.Clear();
+
+        // Release any remaining active ref-counted keys
+        foreach (var (vk, count) in _activeKeyRefCounts)
+        {
+            if (count > 0)
+            {
+                NativeMethods.keybd_event(vk, 0, NativeMethods.KEYEVENTF_KEYUP, UIntPtr.Zero);
+            }
+        }
         _activeKeyRefCounts.Clear();
 
-        // 1. Unconditionally release critical modifiers to prevent sticky keys
-        byte[] criticalModifiers = { 0x11 /* Ctrl */, 0x12 /* Alt */, 0x10 /* Shift */, 0x5B /* LWin */, 0x5C /* RWin */ };
-        foreach (var mod in criticalModifiers)
+        // 2. Release all tracked mouse buttons across all connections
+        foreach (var (_, heldButtons) in _connectionMouseButtons)
         {
-            NativeMethods.keybd_event(mod, 0, NativeMethods.KEYEVENTF_KEYUP, UIntPtr.Zero);
+            foreach (var btn in heldButtons.Keys)
+            {
+                uint flag = btn switch
+                {
+                    "right" => (uint)NativeMethods.MouseEventFlags.RIGHTUP,
+                    "middle" => (uint)NativeMethods.MouseEventFlags.MIDDLEUP,
+                    _ => (uint)NativeMethods.MouseEventFlags.LEFTUP
+                };
+                NativeMethods.mouse_event(flag, 0, 0, 0, UIntPtr.Zero);
+            }
         }
+        _connectionMouseButtons.Clear();
 
-        // 2. Unconditionally release all mouse buttons if locked
-        NativeMethods.mouse_event((uint)NativeMethods.MouseEventFlags.LEFTUP, 0, 0, 0, UIntPtr.Zero);
-        NativeMethods.mouse_event((uint)NativeMethods.MouseEventFlags.RIGHTUP, 0, 0, 0, UIntPtr.Zero);
-        NativeMethods.mouse_event((uint)NativeMethods.MouseEventFlags.MIDDLEUP, 0, 0, 0, UIntPtr.Zero);
+        // Release any remaining active ref-counted mouse buttons
+        foreach (var (btn, count) in _activeMouseButtonRefCounts)
+        {
+            if (count > 0)
+            {
+                uint flag = btn switch
+                {
+                    "right" => (uint)NativeMethods.MouseEventFlags.RIGHTUP,
+                    "middle" => (uint)NativeMethods.MouseEventFlags.MIDDLEUP,
+                    _ => (uint)NativeMethods.MouseEventFlags.LEFTUP
+                };
+                NativeMethods.mouse_event(flag, 0, 0, 0, UIntPtr.Zero);
+            }
+        }
+        _activeMouseButtonRefCounts.Clear();
 
-        _logger.LogInformation("All remote held keys, mouse buttons, and modifiers released safely.");
+        _logger.LogInformation("All tracked remote held keys and mouse buttons released safely without phantom events.");
     }
 
     private static NativeMethods.INPUT CreateKeyInput(byte vk, bool isKeyUp, bool isExtended)

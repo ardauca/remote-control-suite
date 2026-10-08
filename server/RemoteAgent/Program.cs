@@ -140,7 +140,9 @@ public static class Program
         }
 
         // 6. Route Handlers
-        // Health endpoint
+        // Health endpoints
+        app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
+
         app.MapGet("/api/health", () =>
         {
             var ips = SystemInfoHelper.GetLocalIpAddresses();

@@ -26,7 +26,7 @@ The remote control attack surface is hardened with defense-in-depth:
   5. Brute-force lockout: 5 failed attempts from an IP address triggers a 5-minute lockout.
 * **Capability-Based Authorization:** Operations are partitioned into capabilities (`input.control`, `media.control`, `volume.control`, `power.control`, `screen.read`).
 * **Multi-Tier Token-Bucket Rate Limiting:**
-  * Mouse movement: 120 events/sec
+  * Mouse movement: 360 burst, 360 events/sec (ProMotion 120Hz optimized)
   * Clicks & Keys: 60 burst, 40 events/sec
   * Text & Shortcuts: 15 burst, 10 events/sec
   * Power & Launch Commands: 2 burst, 1 per 2.5s

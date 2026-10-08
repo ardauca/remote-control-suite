@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { wsClient } from '../../protocol/wsClient';
+import { useConnectionStore } from '../../stores/connectionStore';
 import { KeyboardControlBar } from '../keyboard/KeyboardControlBar';
 import { 
   Sliders, 
@@ -34,6 +35,7 @@ export const TouchpadView: React.FC = () => {
   });
   const [showSettings, setShowSettings] = useState<boolean>(false);
   const [isDragLocked, setIsDragLocked] = useState<boolean>(false);
+  const isDragLockedRef = useRef<boolean>(false);
 
   // Physical mouse button holding states
   const [isLeftHeld, setIsLeftHeld] = useState<boolean>(false);
@@ -41,6 +43,13 @@ export const TouchpadView: React.FC = () => {
 
   const [isRightHeld, setIsRightHeld] = useState<boolean>(false);
   const isRightHeldRef = useRef<boolean>(false);
+
+  // Remotely synchronized button states to guarantee idempotency and prevent duplicate mouse.up / stuck buttons
+  const remoteLeftDownRef = useRef<boolean>(false);
+  const remoteRightDownRef = useRef<boolean>(false);
+
+  // Connection status from store for disconnect safety
+  const connectionStatus = useConnectionStore((s) => s.status);
 
   // High performance mutable tracking refs (Zero React Re-renders during movement)
   const stateRef = useRef({
@@ -67,26 +76,67 @@ export const TouchpadView: React.FC = () => {
     stateRef.current.acceleration = acceleration;
   }, [sensitivity, acceleration]);
 
-  // Safety release on unmount, blur, pointercancel, or tab switch
-  useEffect(() => {
-    const releaseSafety = () => {
-      if (isLeftHeldRef.current) {
-        isLeftHeldRef.current = false;
-        setIsLeftHeld(false);
-        wsClient.send('command', 'mouse.up', { button: 'left' });
-      }
-      if (isRightHeldRef.current) {
-        isRightHeldRef.current = false;
-        setIsRightHeld(false);
-        wsClient.send('command', 'mouse.up', { button: 'right' });
-      }
-      if (tapTimeoutRef.current !== null) {
-        clearTimeout(tapTimeoutRef.current);
-        tapTimeoutRef.current = null;
-      }
-      lastTapRef.current = null;
-    };
+  // Idempotent dispatchers ensuring remote agent button state stays in perfect sync
+  const updateRemoteLeftState = useCallback((shouldBeDown: boolean) => {
+    if (shouldBeDown && !remoteLeftDownRef.current) {
+      remoteLeftDownRef.current = true;
+      wsClient.send('command', 'mouse.down', { button: 'left' });
+    } else if (!shouldBeDown && remoteLeftDownRef.current) {
+      remoteLeftDownRef.current = false;
+      wsClient.send('command', 'mouse.up', { button: 'left' });
+    }
+  }, []);
 
+  const updateRemoteRightState = useCallback((shouldBeDown: boolean) => {
+    if (shouldBeDown && !remoteRightDownRef.current) {
+      remoteRightDownRef.current = true;
+      wsClient.send('command', 'mouse.down', { button: 'right' });
+    } else if (!shouldBeDown && remoteRightDownRef.current) {
+      remoteRightDownRef.current = false;
+      wsClient.send('command', 'mouse.up', { button: 'right' });
+    }
+  }, []);
+
+  // Comprehensive safety release: resets UI state and dispatches mouse.up only if remote was held
+  const releaseSafety = useCallback(() => {
+    if (isDragLockedRef.current) {
+      isDragLockedRef.current = false;
+      setIsDragLocked(false);
+    }
+    if (isLeftHeldRef.current) {
+      isLeftHeldRef.current = false;
+      setIsLeftHeld(false);
+    }
+    if (isRightHeldRef.current) {
+      isRightHeldRef.current = false;
+      setIsRightHeld(false);
+    }
+
+    // Idempotently release buttons if held remotely
+    if (remoteLeftDownRef.current) {
+      remoteLeftDownRef.current = false;
+      wsClient.send('command', 'mouse.up', { button: 'left' });
+    }
+    if (remoteRightDownRef.current) {
+      remoteRightDownRef.current = false;
+      wsClient.send('command', 'mouse.up', { button: 'right' });
+    }
+
+    if (tapTimeoutRef.current !== null) {
+      clearTimeout(tapTimeoutRef.current);
+      tapTimeoutRef.current = null;
+    }
+    lastTapRef.current = null;
+    stateRef.current.activePointers.clear();
+    stateRef.current.lastTwoFingerY = 0;
+    stateRef.current.scrollAccumulator = 0;
+    if (touchTrackerRef.current) {
+      touchTrackerRef.current.style.opacity = '0';
+    }
+  }, []);
+
+  // Safety release on unmount, window blur, pointercancel, or tab switch / Safari backgrounding
+  useEffect(() => {
     const handleVisibilityChange = () => {
       if (document.hidden) {
         releaseSafety();
@@ -103,7 +153,14 @@ export const TouchpadView: React.FC = () => {
       window.removeEventListener('pointercancel', releaseSafety);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  }, []);
+  }, [releaseSafety]);
+
+  // Safety release on WebSocket disconnect (guarantees no stuck buttons on reconnect)
+  useEffect(() => {
+    if (connectionStatus !== 'connected') {
+      releaseSafety();
+    }
+  }, [connectionStatus, releaseSafety]);
 
   // Prevent Safari zoom/gesture defaults on touchpad surface
   useEffect(() => {
@@ -125,15 +182,15 @@ export const TouchpadView: React.FC = () => {
     };
   }, [activeMode]);
 
-  const toggleDragLock = () => {
-    const newState = !isDragLocked;
-    setIsDragLocked(newState);
-    if (newState) {
-      wsClient.send('command', 'mouse.down', { button: 'left' });
-    } else {
-      wsClient.send('command', 'mouse.up', { button: 'left' });
-    }
-  };
+  const toggleDragLock = useCallback(() => {
+    setIsDragLocked((prev) => {
+      const next = !prev;
+      isDragLockedRef.current = next;
+      // Desired left state is dragLock OR physical hold
+      updateRemoteLeftState(next || isLeftHeldRef.current);
+      return next;
+    });
+  }, [updateRemoteLeftState]);
 
   const handleButtonClick = (button: 'left' | 'right' | 'middle', double = false) => {
     wsClient.send('command', 'mouse.click', { button, double });
@@ -150,18 +207,19 @@ export const TouchpadView: React.FC = () => {
     if (!isLeftHeldRef.current) {
       isLeftHeldRef.current = true;
       setIsLeftHeld(true);
-      wsClient.send('command', 'mouse.down', { button: 'left' });
+      updateRemoteLeftState(true);
     }
-  }, []);
+  }, [updateRemoteLeftState]);
 
   const handleLeftUp = useCallback((e: React.PointerEvent<HTMLButtonElement>) => {
     e.preventDefault();
     if (isLeftHeldRef.current) {
       isLeftHeldRef.current = false;
       setIsLeftHeld(false);
-      wsClient.send('command', 'mouse.up', { button: 'left' });
+      // Only release remote left button if drag lock is not active
+      updateRemoteLeftState(isDragLockedRef.current);
     }
-  }, []);
+  }, [updateRemoteLeftState]);
 
   // Physical Right Mouse Button Hold Handlers
   const handleRightDown = useCallback((e: React.PointerEvent<HTMLButtonElement>) => {
@@ -174,18 +232,18 @@ export const TouchpadView: React.FC = () => {
     if (!isRightHeldRef.current) {
       isRightHeldRef.current = true;
       setIsRightHeld(true);
-      wsClient.send('command', 'mouse.down', { button: 'right' });
+      updateRemoteRightState(true);
     }
-  }, []);
+  }, [updateRemoteRightState]);
 
   const handleRightUp = useCallback((e: React.PointerEvent<HTMLButtonElement>) => {
     e.preventDefault();
     if (isRightHeldRef.current) {
       isRightHeldRef.current = false;
       setIsRightHeld(false);
-      wsClient.send('command', 'mouse.up', { button: 'right' });
+      updateRemoteRightState(false);
     }
-  }, []);
+  }, [updateRemoteRightState]);
 
   // Pointer Down on Touchpad Surface
   const handlePointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
@@ -327,15 +385,19 @@ export const TouchpadView: React.FC = () => {
         }
       }
     }
-    // 2 Fingers -> Scrolling
+    // 2 Fingers -> Scrolling (Centroid-based stabilization)
     else if (pointers.size === 2) {
       ptr.lastX = e.clientX;
       ptr.lastY = e.clientY;
 
       const pArray = Array.from(pointers.values());
-      const currentY = (pArray[0].lastY + pArray[1].lastY) / 2;
-      const dyRaw = currentY - stateRef.current.lastTwoFingerY;
+      const currentCentroidY = (pArray[0].lastY + pArray[1].lastY) / 2;
 
+      if (stateRef.current.lastTwoFingerY === 0) {
+        stateRef.current.lastTwoFingerY = currentCentroidY;
+      }
+
+      const dyRaw = currentCentroidY - stateRef.current.lastTwoFingerY;
       stateRef.current.hasMoved = true;
       stateRef.current.scrollAccumulator += dyRaw;
 
@@ -347,7 +409,7 @@ export const TouchpadView: React.FC = () => {
         wsClient.send('command', 'mouse.scroll', { dx: 0, dy: steps });
       }
 
-      stateRef.current.lastTwoFingerY = currentY;
+      stateRef.current.lastTwoFingerY = currentCentroidY;
     }
   }, []);
 
@@ -358,8 +420,28 @@ export const TouchpadView: React.FC = () => {
     const ptr = stateRef.current.activePointers.get(e.pointerId);
     stateRef.current.activePointers.delete(e.pointerId);
 
+    // Multi-touch transition cleanup:
+    // Reset centroid & scroll accumulator when dropping below 2 fingers to avoid jump on next gesture
+    if (stateRef.current.activePointers.size < 2) {
+      stateRef.current.lastTwoFingerY = 0;
+      stateRef.current.scrollAccumulator = 0;
+    }
+
+    // If exactly 1 pointer remains, synchronize its coordinates so single-finger moves do not jump
+    if (stateRef.current.activePointers.size === 1) {
+      for (const remainingPtr of stateRef.current.activePointers.values()) {
+        remainingPtr.startX = remainingPtr.lastX;
+        remainingPtr.startY = remainingPtr.lastY;
+      }
+      stateRef.current.hasMoved = true;
+    }
+
     const elapsed = Date.now() - stateRef.current.startTime;
     const totalDist = ptr ? Math.hypot(e.clientX - ptr.startX, e.clientY - ptr.startY) : 999;
+
+    // Harmonized double-tap timeout constant (210ms)
+    // Ensures single-tap timer and double-tap detection window match precisely
+    const DOUBLE_TAP_TIMEOUT_MS = 210;
 
     // Tap detection on main touchpad surface (clean tap within 280ms & <8px total movement)
     if (!ptr?.isEdgeScroll && totalDist < 8 && elapsed < 280) {
@@ -369,7 +451,7 @@ export const TouchpadView: React.FC = () => {
         const prevTap = lastTapRef.current;
         const isDoubleTap = 
           prevTap !== null &&
-          (now - prevTap.time) < 320 &&
+          (now - prevTap.time) <= DOUBLE_TAP_TIMEOUT_MS &&
           Math.hypot(e.clientX - prevTap.x, e.clientY - prevTap.y) < 25;
 
         if (isDoubleTap) {
@@ -391,7 +473,7 @@ export const TouchpadView: React.FC = () => {
             tapTimeoutRef.current = null;
             lastTapRef.current = null;
             wsClient.send('command', 'mouse.click', { button: 'left', double: false });
-          }, 190);
+          }, DOUBLE_TAP_TIMEOUT_MS);
         }
       } else if (countBeforeRemove === 2) {
         // Two-Finger Tap -> Right Click immediately

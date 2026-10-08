@@ -2,7 +2,7 @@
 const http = require('http');
 
 const WS_URL = 'ws://localhost:52520/ws';
-const AUTH_TOKEN = 'test_benchmark_token_2026';
+const AUTH_TOKEN = process.env.AUTH_TOKEN || 'test_benchmark_token_2026';
 
 function testHttpSnapshot() {
   return new Promise((resolve, reject) => {
@@ -251,23 +251,9 @@ async function runTest() {
   }
 
   // Test 6: Remote Screen Touch & Stream Stop
-  console.log('\n[6/6] Testing remote touch input & stream stop...');
+  console.log('\n[6/6] Testing stream stop & remote touch input assertions...');
 
-  // Move
-  sendMsg(ws, 'screen.touch', { type: 'move', normalizedX: 0.5, normalizedY: 0.5 });
-  await new Promise(r => setTimeout(r, 100));
-
-  // Click
-  sendMsg(ws, 'screen.touch', { type: 'click', normalizedX: 0.5, normalizedY: 0.5, button: 'left' });
-  await new Promise(r => setTimeout(r, 100));
-
-  // Right Click
-  sendMsg(ws, 'screen.touch', { type: 'rightClick', normalizedX: 0.5, normalizedY: 0.5, button: 'right' });
-  await new Promise(r => setTimeout(r, 100));
-
-  console.log('  ✓ Touch events (move, click, right-click) dispatched successfully');
-
-  // Stop stream
+  // Stop stream first to ensure clean state
   sendMsg(ws, 'screen.stop');
   console.log('  Sent screen.stop. Waiting 1.5 seconds to verify stream halt...');
   const countBefore = binaryFrames.length;
@@ -280,6 +266,49 @@ async function runTest() {
     process.exit(1);
   }
   console.log('  ✓ Stream stopped cleanly');
+
+  // Helper to test touch input and assert actual remote cursor position via snapshot
+  async function assertTouchPosition(normX, normY, type = 'move', button = 'left', label = '') {
+    sendMsg(ws, 'screen.touch', { type, normX, normY, button });
+    await new Promise(r => setTimeout(r, 150));
+
+    binaryFrames.length = 0;
+    sendMsg(ws, 'screen.snapshot', { quality: 50, scale: 0.5 });
+    const snapFrame = await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(`Timeout waiting for snapshot at ${label}`)), 4000);
+      const interval = setInterval(() => {
+        if (binaryFrames.length > 0) {
+          clearInterval(interval);
+          clearTimeout(timer);
+          resolve(binaryFrames.shift());
+        }
+      }, 40);
+    });
+
+    const parsed = parseBinaryHeader(snapFrame);
+    const diffX = Math.abs(parsed.cursorX - normX);
+    const diffY = Math.abs(parsed.cursorY - normY);
+    console.log(`    - [${label}] Target: (${normX.toFixed(2)}, ${normY.toFixed(2)}) -> Remote Cursor: (${parsed.cursorX.toFixed(3)}, ${parsed.cursorY.toFixed(3)})`);
+
+    // Verify coordinates match with tolerance of 0.05 (accounts for multi-monitor / integer roundoff)
+    if (diffX > 0.05 || diffY > 0.05) {
+      throw new Error(`Cursor position mismatch at ${label}: expected (~${normX}, ~${normY}), got (${parsed.cursorX.toFixed(3)}, ${parsed.cursorY.toFixed(3)})`);
+    }
+  }
+
+  // 1. Move to 0.25 (Top-Left quadrant)
+  await assertTouchPosition(0.25, 0.25, 'move', 'left', 'Position 0.25');
+
+  // 2. Move to 0.75 (Bottom-Right quadrant)
+  await assertTouchPosition(0.75, 0.75, 'move', 'left', 'Position 0.75');
+
+  // 3. Move & Left Click at Center (0.50)
+  await assertTouchPosition(0.50, 0.50, 'click', 'left', 'Center Click 0.50');
+
+  // 4. Right Click at Center (0.50) with protocol type 'right'
+  await assertTouchPosition(0.50, 0.50, 'right', 'right', 'Center Right-Click 0.50');
+
+  console.log('  ✓ Touch coordinate execution and click/right-click verified successfully on remote screen');
 
   ws.close();
 

@@ -28,6 +28,51 @@ export const App: React.FC = () => {
     };
   }, []);
 
+  // Screen Wake Lock: Keep phone screen awake while connected to prevent auto-lock during remote control
+  useEffect(() => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let wakeLockSentinel: any = null;
+
+    const requestWakeLock = async () => {
+      if ('wakeLock' in navigator && status === 'connected' && document.visibilityState === 'visible') {
+        try {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          wakeLockSentinel = await (navigator as any).wakeLock.request('screen');
+        } catch {
+          // Ignore - e.g. low power mode or battery saver
+        }
+      }
+    };
+
+    const releaseWakeLock = () => {
+      if (wakeLockSentinel) {
+        wakeLockSentinel.release().catch(() => {});
+        wakeLockSentinel = null;
+      }
+    };
+
+    if (status === 'connected') {
+      requestWakeLock();
+    } else {
+      releaseWakeLock();
+    }
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible' && status === 'connected') {
+        requestWakeLock();
+      } else {
+        releaseWakeLock();
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      releaseWakeLock();
+    };
+  }, [status]);
+
   return (
     <div className="flex flex-col h-full w-full bg-dark-900 text-slate-100 select-none overflow-hidden">
       {/* Top Header with iOS Safe Area */}

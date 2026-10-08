@@ -1,5 +1,5 @@
-// Phase 4 Rigorous Keyboard & Security Verification Suite
 const WS_URL = 'ws://localhost:52520/ws';
+const AUTH_TOKEN = process.env.AUTH_TOKEN || 'test_benchmark_token_2026';
 
 function connectWs() {
   return new Promise((resolve, reject) => {
@@ -72,6 +72,14 @@ async function runVerification() {
   }
   console.log('✔ Capability input.keyboard confirmed.');
 
+  // Authenticate clientA
+  sendMsg(clientA, 'auth.login', { token: AUTH_TOKEN });
+  const authRes = await waitForAction(clientA, 'auth.result');
+  if (!authRes.payload.authenticated) {
+    throw new Error('Authentication failed for clientA');
+  }
+  console.log('✔ Authenticated clientA successfully.');
+
   // Test 2: Valid Turkish Unicode & Emojis
   console.log('\n[2/7] Testing Unicode Text Input (Turkish characters & Emojis)...');
   sendMsg(clientA, 'keyboard.text', {
@@ -129,6 +137,8 @@ async function runVerification() {
   // Client B connects
   const clientB = await connectWs();
   await waitForAction(clientB, 'system.hello');
+  sendMsg(clientB, 'auth.login', { token: AUTH_TOKEN });
+  await waitForAction(clientB, 'auth.result');
   console.log('• Client B connected simultaneously');
 
   // Client A disconnects abruptly

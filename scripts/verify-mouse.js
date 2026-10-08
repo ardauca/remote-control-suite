@@ -1,4 +1,5 @@
 // Phase 3 Mouse & Touchpad Protocol Verification Script
+const AUTH_TOKEN = process.env.AUTH_TOKEN || 'test_benchmark_token_2026';
 
 async function testMouseProtocol() {
   console.log('Testing Mouse & Touchpad Input via WebSocket...');
@@ -18,7 +19,20 @@ async function testMouseProtocol() {
       try {
         const msg = JSON.parse(event.data);
         if (msg.action === 'system.hello') {
-          console.log('✔ Host hello received. Sending mouse movement...');
+          console.log('✔ Host hello received. Authenticating...');
+          ws.send(JSON.stringify({
+            version: 1,
+            id: 'auth-req-1',
+            type: 'command',
+            action: 'auth.login',
+            payload: { token: AUTH_TOKEN },
+            timestamp: Date.now()
+          }));
+        } else if (msg.action === 'auth.result') {
+          if (!msg.payload.authenticated) {
+            return reject(new Error('Authentication failed in verify-mouse.js'));
+          }
+          console.log('✔ Authenticated successfully. Sending mouse movement...');
 
           // Test 1: Relative Mouse Move
           ws.send(JSON.stringify({

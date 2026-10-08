@@ -46,3 +46,64 @@ jobs:
 
       - name: Publish Server Agent
         run: dotnet publish server/RemoteAgent/RemoteAgent.csproj -c Release -o publish --no-build
+
+      # 3. Automated Protocol & Security Smoke Tests
+      - name: Run Automated Smoke Tests
+        shell: powershell
+        env:
+          Agent__AuthToken: test_benchmark_token_2026
+          AUTH_TOKEN: test_benchmark_token_2026
+        run: |
+          $ErrorActionPreference = "Stop"
+          Write-Host "Starting RemoteAgent.exe in background with --tray..."
+          $process = Start-Process -FilePath "publish\RemoteAgent.exe" -ArgumentList "--tray" -PassThru
+
+          try {
+            Write-Host "Waiting for RemoteAgent to initialize (polling http://localhost:52520/health)..."
+            $ready = $false
+            $timeout = (Get-Date).AddSeconds(30)
+            while ((Get-Date) -lt $timeout) {
+              try {
+                $response = Invoke-WebRequest -Uri "http://localhost:52520/health" -UseBasicParsing -TimeoutSec 2
+                if ($response.StatusCode -eq 200) {
+                  $ready = $true
+                  break
+                }
+              } catch {
+                Start-Sleep -Milliseconds 500
+              }
+            }
+
+            if (-not $ready) {
+              throw "RemoteAgent did not respond to health check within 30 seconds"
+            }
+            Write-Host "RemoteAgent is ready. Starting verification test suite..."
+
+            Write-Host ">>> 1/6: verify-websocket.js"
+            node scripts/verify-websocket.js
+
+            Write-Host ">>> 2/6: verify-auth-security.js"
+            node scripts/verify-auth-security.js
+
+            Write-Host ">>> 3/6: verify-mouse.js"
+            node scripts/verify-mouse.js
+
+            Write-Host ">>> 4/6: verify-keyboard.js"
+            node scripts/verify-keyboard.js
+
+            Write-Host ">>> 5/6: verify-rate-limiting.js"
+            node scripts/verify-rate-limiting.js
+
+            Write-Host ">>> 6/6: verify-screen.js"
+            node scripts/verify-screen.js
+
+            Write-Host ">>> ALL 6 AUTOMATED SMOKE TESTS COMPLETED SUCCESSFULLY! <<<"
+          }
+          finally {
+            Write-Host "Gracefully stopping RemoteAgent..."
+            if ($process -and -not $process.HasExited) {
+              Stop-Process -Id $process.Id -Force
+            }
+            Get-Process RemoteAgent -ErrorAction SilentlyContinue | Stop-Process -Force
+            Write-Host "Teardown complete."
+          }
