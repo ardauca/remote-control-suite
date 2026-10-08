@@ -196,17 +196,17 @@ export const MediaControlView: React.FC = () => {
         </div>
       </div>
 
-      {/* 3. Quick App Launcher (Hızlı Program Başlatıcı) */}
+      {/* 3. Quick App Launcher */}
       <div className="shrink-0 bg-dark-800/80 rounded-3xl p-4 border border-slate-700/60 shadow-xl space-y-3">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2 text-xs font-bold text-slate-200 uppercase tracking-wider">
             <Sparkles className="w-4 h-4 text-cyan-400" />
-            Hızlı Program Başlatıcı
+            Quick App Launcher
           </div>
           {launchedApp && (
             <span className="text-[11px] font-medium text-emerald-400 animate-fadeIn flex items-center gap-1">
               <Check className="w-3.5 h-3.5" />
-              {launchedApp} açılıyor...
+              Opening {launchedApp}...
             </span>
           )}
         </div>
@@ -215,10 +215,10 @@ export const MediaControlView: React.FC = () => {
           {[
             { id: 'chrome', name: 'Chrome', icon: Globe, color: 'text-amber-400 hover:border-amber-500/50' },
             { id: 'ytmusic', name: 'YT Music', icon: Music, color: 'text-rose-400 hover:border-rose-500/50' },
-            { id: 'notepad', name: 'Not Defteri', icon: FileText, color: 'text-sky-400 hover:border-sky-500/50' },
-            { id: 'calc', name: 'Hesap Mak.', icon: Calculator, color: 'text-purple-400 hover:border-purple-500/50' },
-            { id: 'explorer', name: 'Dosyalar', icon: Folder, color: 'text-yellow-400 hover:border-yellow-500/50' },
-            { id: 'taskmanager', name: 'Görev Yön.', icon: Activity, color: 'text-rose-400 hover:border-rose-500/50' },
+            { id: 'notepad', name: 'Notepad', icon: FileText, color: 'text-sky-400 hover:border-sky-500/50' },
+            { id: 'calc', name: 'Calculator', icon: Calculator, color: 'text-purple-400 hover:border-purple-500/50' },
+            { id: 'explorer', name: 'Explorer', icon: Folder, color: 'text-yellow-400 hover:border-yellow-500/50' },
+            { id: 'taskmanager', name: 'Task Mgr', icon: Activity, color: 'text-rose-400 hover:border-rose-500/50' },
             { id: 'terminal', name: 'Terminal', icon: Terminal, color: 'text-slate-200 hover:border-slate-500/50' },
             { id: 'discord', name: 'Discord', icon: MessageSquare, color: 'text-indigo-400 hover:border-indigo-500/50' },
           ].map((app) => {
@@ -228,7 +228,8 @@ export const MediaControlView: React.FC = () => {
                 key={app.id}
                 onClick={() => handleLaunchApp(app.id, app.name)}
                 className={`h-16 rounded-2xl bg-dark-900 border border-slate-700/80 flex flex-col items-center justify-center gap-1 transition-all active:scale-90 shadow-md ${app.color}`}
-                title={`${app.name} Başlat`}
+                title={`Launch ${app.name}`}
+                aria-label={`Launch ${app.name}`}
               >
                 <Icon className="w-5 h-5" />
                 <span className="text-[10px] font-semibold text-slate-300 truncate max-w-[90%]">{app.name}</span>
@@ -249,6 +250,8 @@ export const MediaControlView: React.FC = () => {
                   ? 'bg-rose-500/20 text-rose-400 border-rose-500/40'
                   : 'bg-brand-500/20 text-brand-300 border-brand-500/40'
               }`}
+              title={isMuted ? 'Unmute Master' : 'Mute Master'}
+              aria-label={isMuted ? 'Unmute Master' : 'Mute Master'}
             >
               {isMuted ? <VolumeX className="w-5 h-5" /> : masterVol < 30 ? <Volume1 className="w-5 h-5" /> : <Volume2 className="w-5 h-5" />}
             </button>
@@ -278,16 +281,43 @@ export const MediaControlView: React.FC = () => {
           </div>
         </div>
 
-        {/* Master Slider */}
-        <input
-          type="range"
-          min="0"
-          max="100"
-          step="1"
-          value={isMuted ? 0 : masterVol}
-          onChange={handleMasterChange}
-          className="w-full h-3 bg-dark-900 rounded-lg appearance-none cursor-pointer accent-brand-500"
-        />
+        {/* Master Slider with +/- 5% micro-step buttons */}
+        <div className="flex items-center gap-2.5">
+          <button
+            onClick={() => {
+              const next = Math.max(0, masterVol - 5);
+              setMasterVolume(next);
+              if ('vibrate' in navigator) navigator.vibrate(6);
+            }}
+            className="px-2.5 py-1.5 rounded-xl bg-dark-900 hover:bg-dark-700 text-slate-300 font-bold text-xs border border-slate-700 active:scale-95 transition-all shrink-0"
+            title="Decrease volume by 5%"
+            aria-label="Volume minus 5%"
+          >
+            -5%
+          </button>
+          <input
+            type="range"
+            min="0"
+            max="100"
+            step="1"
+            value={isMuted ? 0 : masterVol}
+            onChange={handleMasterChange}
+            aria-label="Master volume slider"
+            className="flex-1 h-3 bg-dark-900 rounded-lg appearance-none cursor-pointer accent-brand-500"
+          />
+          <button
+            onClick={() => {
+              const next = Math.min(100, masterVol + 5);
+              setMasterVolume(next);
+              if ('vibrate' in navigator) navigator.vibrate(6);
+            }}
+            className="px-2.5 py-1.5 rounded-xl bg-dark-900 hover:bg-dark-700 text-slate-300 font-bold text-xs border border-slate-700 active:scale-95 transition-all shrink-0"
+            title="Increase volume by 5%"
+            aria-label="Volume plus 5%"
+          >
+            +5%
+          </button>
+        </div>
       </div>
 
       {/* 4. Windows Volume Mixer (App Sessions) */}

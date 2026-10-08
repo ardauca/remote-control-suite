@@ -7,7 +7,11 @@ import {
   Move, 
   MousePointerClick,
   MousePointer,
-  Keyboard
+  Keyboard,
+  HelpCircle,
+  RotateCcw,
+  ChevronUp,
+  ChevronDown
 } from 'lucide-react';
 
 interface PointerInfo {
@@ -34,6 +38,7 @@ export const TouchpadView: React.FC = () => {
     return localStorage.getItem('touchpad_acceleration') !== 'false';
   });
   const [showSettings, setShowSettings] = useState<boolean>(false);
+  const [showGestureHelp, setShowGestureHelp] = useState<boolean>(false);
   const [isDragLocked, setIsDragLocked] = useState<boolean>(false);
   const isDragLockedRef = useRef<boolean>(false);
 
@@ -182,7 +187,16 @@ export const TouchpadView: React.FC = () => {
     };
   }, [activeMode]);
 
+  const handleResetSettings = useCallback(() => {
+    if ('vibrate' in navigator) navigator.vibrate(10);
+    setSensitivity(1.4);
+    setAcceleration(true);
+    localStorage.setItem('touchpad_sensitivity', '1.4');
+    localStorage.setItem('touchpad_acceleration', 'true');
+  }, []);
+
   const toggleDragLock = useCallback(() => {
+    if ('vibrate' in navigator) navigator.vibrate(12);
     setIsDragLocked((prev) => {
       const next = !prev;
       isDragLockedRef.current = next;
@@ -193,12 +207,14 @@ export const TouchpadView: React.FC = () => {
   }, [updateRemoteLeftState]);
 
   const handleButtonClick = (button: 'left' | 'right' | 'middle', double = false) => {
+    if ('vibrate' in navigator) navigator.vibrate(8);
     wsClient.send('command', 'mouse.click', { button, double });
   };
 
   // Physical Left Mouse Button Hold Handlers (multi-touch drag support)
   const handleLeftDown = useCallback((e: React.PointerEvent<HTMLButtonElement>) => {
     e.preventDefault();
+    if ('vibrate' in navigator) navigator.vibrate(8);
     try {
       e.currentTarget.setPointerCapture(e.pointerId);
     } catch {
@@ -224,6 +240,7 @@ export const TouchpadView: React.FC = () => {
   // Physical Right Mouse Button Hold Handlers
   const handleRightDown = useCallback((e: React.PointerEvent<HTMLButtonElement>) => {
     e.preventDefault();
+    if ('vibrate' in navigator) navigator.vibrate(8);
     try {
       e.currentTarget.setPointerCapture(e.pointerId);
     } catch {
@@ -559,18 +576,89 @@ export const TouchpadView: React.FC = () => {
 
             <div className="flex items-center gap-1.5">
               <button
-                onClick={() => setShowSettings(!showSettings)}
+                onClick={() => {
+                  if ('vibrate' in navigator) navigator.vibrate(6);
+                  setShowGestureHelp(!showGestureHelp);
+                  if (showSettings) setShowSettings(false);
+                }}
+                className={`p-2 rounded-xl text-xs border transition-colors ${
+                  showGestureHelp 
+                    ? 'bg-brand-500/20 text-brand-400 border-brand-500/40' 
+                    : 'bg-dark-800 text-slate-400 border-slate-700 hover:text-white'
+                }`}
+                title="Gesture Guide"
+                aria-label="Gesture Guide"
+              >
+                <HelpCircle className="w-4 h-4" />
+              </button>
+
+              <button
+                onClick={() => {
+                  if ('vibrate' in navigator) navigator.vibrate(6);
+                  setShowSettings(!showSettings);
+                  if (showGestureHelp) setShowGestureHelp(false);
+                }}
                 className={`p-2 rounded-xl text-xs border transition-colors ${
                   showSettings 
                     ? 'bg-brand-500/20 text-brand-400 border-brand-500/40' 
                     : 'bg-dark-800 text-slate-400 border-slate-700 hover:text-white'
                 }`}
                 title="Touchpad Settings"
+                aria-label="Touchpad Settings"
               >
                 <Sliders className="w-4 h-4" />
               </button>
             </div>
           </div>
+
+          {/* Gesture Guide Drawer (Expandable) */}
+          {showGestureHelp && (
+            <div className="bg-dark-800/95 backdrop-blur-md rounded-2xl p-3.5 border border-brand-500/30 space-y-2.5 shrink-0 animate-fadeIn">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-brand-400 uppercase tracking-wider">Touchpad Gestures</span>
+                <button
+                  onClick={() => setShowGestureHelp(false)}
+                  className="text-slate-400 hover:text-white text-xs px-2 py-0.5 rounded-lg bg-dark-700/60"
+                >
+                  Close
+                </button>
+              </div>
+              <div className="grid grid-cols-2 gap-2 text-[11px] text-slate-300">
+                <div className="bg-dark-900/60 p-2 rounded-xl border border-slate-700/50">
+                  <div className="font-semibold text-white">1-Finger Move</div>
+                  <div className="text-slate-400 text-[10px]">Move mouse cursor</div>
+                </div>
+                <div className="bg-dark-900/60 p-2 rounded-xl border border-slate-700/50">
+                  <div className="font-semibold text-white">1-Finger Tap</div>
+                  <div className="text-slate-400 text-[10px]">Left click</div>
+                </div>
+                <div className="bg-dark-900/60 p-2 rounded-xl border border-slate-700/50">
+                  <div className="font-semibold text-white">Double Tap</div>
+                  <div className="text-slate-400 text-[10px]">Double click / open file</div>
+                </div>
+                <div className="bg-dark-900/60 p-2 rounded-xl border border-slate-700/50">
+                  <div className="font-semibold text-white">2-Finger Scroll</div>
+                  <div className="text-slate-400 text-[10px]">Smooth vertical scroll</div>
+                </div>
+                <div className="bg-dark-900/60 p-2 rounded-xl border border-slate-700/50">
+                  <div className="font-semibold text-white">2-Finger Tap</div>
+                  <div className="text-slate-400 text-[10px]">Context / Right click</div>
+                </div>
+                <div className="bg-dark-900/60 p-2 rounded-xl border border-slate-700/50">
+                  <div className="font-semibold text-white">Right Edge Strip</div>
+                  <div className="text-slate-400 text-[10px]">Dedicated scroll wheel</div>
+                </div>
+                <div className="bg-dark-900/60 p-2 rounded-xl border border-slate-700/50">
+                  <div className="font-semibold text-white">Hold Left + Drag</div>
+                  <div className="text-slate-400 text-[10px]">Select text or move files</div>
+                </div>
+                <div className="bg-dark-900/60 p-2 rounded-xl border border-slate-700/50">
+                  <div className="font-semibold text-white">Drag Lock Mode</div>
+                  <div className="text-slate-400 text-[10px]">Hands-free dragging</div>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Settings Drawer (Expandable) */}
           {showSettings && (
@@ -605,15 +693,15 @@ export const TouchpadView: React.FC = () => {
                 />
               </div>
 
-              <div className="text-[11px] text-slate-400 pt-1 border-t border-slate-700/50 flex flex-col gap-1">
-                <div className="flex justify-between">
-                  <span>• 1 finger move: Cursor</span>
-                  <span>• Right edge: Scroll wheel</span>
-                </div>
-                <div className="flex justify-between">
-                  <span>• Double tap: Double click</span>
-                  <span>• Hold button + Pad: Drag</span>
-                </div>
+              <div className="flex items-center justify-between pt-1 border-t border-slate-700/50">
+                <span className="text-[11px] text-slate-400">Restore default tuning</span>
+                <button
+                  onClick={handleResetSettings}
+                  className="px-2.5 py-1 text-xs rounded-lg bg-dark-700 hover:bg-dark-600 text-slate-300 flex items-center gap-1.5 transition-colors border border-slate-600/50"
+                >
+                  <RotateCcw className="w-3 h-3 text-slate-400" />
+                  Reset Defaults
+                </button>
               </div>
             </div>
           )}
@@ -645,13 +733,13 @@ export const TouchpadView: React.FC = () => {
             <div 
               className="absolute right-0 top-0 bottom-0 w-[10%] min-w-[28px] max-w-[44px] pointer-events-none flex flex-col items-center justify-between py-5 border-l border-slate-700/30 bg-gradient-to-l from-slate-800/50 to-transparent"
             >
-              <div className="w-1 h-3 rounded-full bg-slate-600/40" />
+              <ChevronUp className="w-3.5 h-3.5 text-slate-500/70" />
               <div className="flex flex-col items-center gap-1 select-none pointer-events-none">
-                <span className="text-[8px] font-mono tracking-widest uppercase [writing-mode:vertical-lr] rotate-180 text-slate-500/60">
+                <span className="text-[8px] font-mono tracking-widest uppercase [writing-mode:vertical-lr] rotate-180 text-slate-400/80">
                   SCROLL
                 </span>
               </div>
-              <div className="w-1 h-3 rounded-full bg-slate-600/40" />
+              <ChevronDown className="w-3.5 h-3.5 text-slate-500/70" />
             </div>
 
             {/* Center Guide Label */}

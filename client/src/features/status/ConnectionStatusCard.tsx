@@ -90,30 +90,73 @@ export const ConnectionStatusCard: React.FC = () => {
           {getStatusBadge()}
         </div>
 
-        {/* Real-time Metrics (Latency, Heartbeat, Protocol) */}
+        {/* Real-time Metrics (Latency, Signal Quality, Protocol) */}
         <div className="grid grid-cols-2 gap-3 pt-1">
           <div className="bg-dark-900/60 rounded-xl p-3 border border-slate-800/80">
             <div className="flex items-center justify-between text-xs text-slate-400 mb-1">
-              <span>Ping / Latency</span>
+              <span>Ping & Quality</span>
               <Activity className="w-3.5 h-3.5 text-cyan-400" />
             </div>
-            <div className="text-lg font-bold text-white tracking-tight">
-              {status === 'connected' && latency !== null ? (
-                <span className="text-emerald-400">{latency} ms</span>
-              ) : (
-                <span className="text-slate-500">--</span>
+            <div className="flex items-baseline justify-between">
+              <div className="text-lg font-bold text-white tracking-tight">
+                {status === 'connected' && latency !== null ? (
+                  <span className={latency < 40 ? 'text-emerald-400' : latency < 100 ? 'text-amber-400' : 'text-rose-400'}>
+                    {latency} ms
+                  </span>
+                ) : (
+                  <span className="text-slate-500">--</span>
+                )}
+              </div>
+              {status === 'connected' && latency !== null && (
+                <span className={`text-[10px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded ${
+                  latency < 40 
+                    ? 'bg-emerald-500/15 text-emerald-400' 
+                    : latency < 100 
+                    ? 'bg-amber-500/15 text-amber-300' 
+                    : 'bg-rose-500/15 text-rose-300'
+                }`}>
+                  {latency < 40 ? 'Good' : latency < 100 ? 'Fair' : 'Slow'}
+                </span>
               )}
             </div>
+            {status === 'connected' && (
+              <button
+                type="button"
+                onClick={() => {
+                  if ('vibrate' in navigator) navigator.vibrate(5);
+                  wsClient.send('heartbeat', 'system.ping', { clientTime: Date.now() });
+                }}
+                className="mt-2 text-[10px] text-brand-400 hover:text-brand-300 flex items-center gap-1 font-medium transition-colors"
+              >
+                <RefreshCw className="w-2.5 h-2.5" />
+                Ping Now
+              </button>
+            )}
           </div>
 
-          <div className="bg-dark-900/60 rounded-xl p-3 border border-slate-800/80">
-            <div className="flex items-center justify-between text-xs text-slate-400 mb-1">
-              <span>Protocol</span>
-              <ShieldCheck className="w-3.5 h-3.5 text-brand-500" />
+          <div className="bg-dark-900/60 rounded-xl p-3 border border-slate-800/80 flex flex-col justify-between">
+            <div>
+              <div className="flex items-center justify-between text-xs text-slate-400 mb-1">
+                <span>Protocol</span>
+                <ShieldCheck className="w-3.5 h-3.5 text-brand-500" />
+              </div>
+              <div className="text-lg font-bold text-white tracking-tight">
+                <span>v1.0 (LAN)</span>
+              </div>
             </div>
-            <div className="text-lg font-bold text-white tracking-tight">
-              <span>v1.0 (LAN)</span>
-            </div>
+            {status !== 'connected' && (
+              <button
+                type="button"
+                onClick={() => {
+                  if ('vibrate' in navigator) navigator.vibrate(10);
+                  wsClient.connect(inputUrl);
+                }}
+                className="mt-2 text-[10px] text-emerald-400 hover:text-emerald-300 flex items-center gap-1 font-medium font-mono transition-colors"
+              >
+                <RefreshCw className="w-2.5 h-2.5 animate-spin" />
+                Connect Now
+              </button>
+            )}
           </div>
         </div>
 

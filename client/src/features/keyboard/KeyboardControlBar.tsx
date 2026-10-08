@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { wsClient } from '../../protocol/wsClient';
+import { useConnectionStore } from '../../stores/connectionStore';
 import { 
   DEFAULT_SHORTCUTS, 
   MacroManager, 
@@ -24,6 +25,7 @@ import {
 type ModifierState = 'IDLE' | 'STICKY' | 'LOCKED';
 
 export const KeyboardControlBar: React.FC = () => {
+  const connectionStatus = useConnectionStore((s) => s.status);
   const [textInput, setTextInput] = useState('');
   const [modifiers, setModifiers] = useState<Record<string, ModifierState>>({
     CTRL: 'IDLE',
@@ -52,8 +54,21 @@ export const KeyboardControlBar: React.FC = () => {
     };
   }, []);
 
+  // Reset modifiers state when connection drops
+  useEffect(() => {
+    if (connectionStatus !== 'connected') {
+      setModifiers({
+        CTRL: 'IDLE',
+        ALT: 'IDLE',
+        SHIFT: 'IDLE',
+        WIN: 'IDLE'
+      });
+    }
+  }, [connectionStatus]);
+
   // Cycle modifier state: IDLE -> STICKY -> LOCKED -> IDLE
   const toggleModifier = (mod: string) => {
+    if ('vibrate' in navigator) navigator.vibrate(8);
     const currentState = modifiers[mod];
     let nextState: ModifierState = 'IDLE';
 
@@ -91,6 +106,7 @@ export const KeyboardControlBar: React.FC = () => {
 
   // Release all keys panic button
   const handleReleaseAll = () => {
+    if ('vibrate' in navigator) navigator.vibrate(12);
     wsClient.send('command', 'keyboard.releaseAll', {});
     setModifiers({
       CTRL: 'IDLE',
@@ -102,6 +118,7 @@ export const KeyboardControlBar: React.FC = () => {
 
   // Send single special key (e.g. ENTER, ESC, TAB, ARROWS)
   const sendSpecialKey = (key: string) => {
+    if ('vibrate' in navigator) navigator.vibrate(6);
     wsClient.send('command', 'keyboard.keyDown', { key });
     setTimeout(() => {
       wsClient.send('command', 'keyboard.keyUp', { key });
@@ -166,6 +183,7 @@ export const KeyboardControlBar: React.FC = () => {
 
   // Execute quick shortcut without unintended modifier merging
   const handleShortcut = (keys: string[]) => {
+    if ('vibrate' in navigator) navigator.vibrate(8);
     // Predefined shortcut is self-contained. Execute shortcut and clear any pending sticky modifiers.
     MacroManager.executeShortcut(keys);
     releaseStickyModifiers();
@@ -210,15 +228,30 @@ export const KeyboardControlBar: React.FC = () => {
           placeholder="Tap here to type on PC (Turkish / Emoji supported)..."
           className="flex-1 bg-dark-900/90 text-white placeholder-slate-500 text-xs px-3.5 py-2.5 rounded-xl border border-slate-700 focus:outline-none focus:border-brand-500 font-sans"
         />
+        {/* Dismiss keyboard button for iOS */}
+        <button
+          type="button"
+          onClick={() => {
+            if ('vibrate' in navigator) navigator.vibrate(6);
+            inputRef.current?.blur();
+          }}
+          title="Dismiss Keyboard"
+          aria-label="Dismiss Keyboard"
+          className="p-2.5 rounded-xl bg-dark-700 hover:bg-dark-600 text-slate-300 border border-slate-600/50 active:scale-95 transition-all flex items-center justify-center shrink-0"
+        >
+          <ChevronDown className="w-4 h-4" />
+        </button>
         <button
           onClick={() => {
             if (textInput) {
+              if ('vibrate' in navigator) navigator.vibrate(8);
               wsClient.send('command', 'keyboard.text', { text: textInput });
               setTextInput('');
               releaseStickyModifiers();
             }
           }}
-          className="p-2.5 rounded-xl bg-brand-500 hover:bg-brand-600 text-white shadow-md shadow-brand-500/20 active:scale-95 transition-all"
+          aria-label="Send Text"
+          className="p-2.5 rounded-xl bg-brand-500 hover:bg-brand-600 text-white shadow-md shadow-brand-500/20 active:scale-95 transition-all shrink-0"
         >
           <Send className="w-4 h-4" />
         </button>
@@ -237,9 +270,9 @@ export const KeyboardControlBar: React.FC = () => {
               onClick={() => toggleModifier(mod)}
               className={`py-2 px-1 rounded-xl text-xs font-bold transition-all border flex flex-col items-center justify-center active:scale-95 ${
                 isLocked
-                  ? 'bg-rose-500/20 text-rose-400 border-rose-500/60 shadow-lg shadow-rose-500/20'
+                  ? 'bg-rose-500/25 text-rose-300 border-rose-400 ring-1 ring-rose-400/50 shadow-md shadow-rose-500/20'
                   : isSticky
-                  ? 'bg-amber-500/20 text-amber-300 border-amber-500/60 shadow-lg shadow-amber-500/20 animate-pulse'
+                  ? 'bg-amber-500/25 text-amber-300 border-amber-400 ring-1 ring-amber-400/50 shadow-md shadow-amber-500/20 animate-pulse'
                   : 'bg-dark-800 text-slate-300 border-slate-700/80 hover:bg-slate-700'
               }`}
             >

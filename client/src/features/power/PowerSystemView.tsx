@@ -61,15 +61,15 @@ export const PowerSystemView: React.FC = () => {
       setConfirmDialog({
         isOpen: true,
         action: 'shutdown',
-        title: 'Bilgisayarı Kapat',
-        description: 'Bilgisayarınız hemen tamamen kapatılacak. Kaydedilmemiş çalışmalarınız kaybolabilir. Emin misiniz?'
+        title: 'Shut Down Computer',
+        description: 'Your PC will be shut down immediately. Any unsaved work may be lost. Are you sure you want to proceed?'
       });
     } else {
       setConfirmDialog({
         isOpen: true,
         action: 'restart',
-        title: 'Yeniden Başlat',
-        description: 'Bilgisayarınız hemen yeniden başlatılacak. Emin misiniz?'
+        title: 'Restart Computer',
+        description: 'Your PC will restart immediately. Any unsaved work may be lost. Are you sure you want to proceed?'
       });
     }
   };
@@ -97,9 +97,9 @@ export const PowerSystemView: React.FC = () => {
     const seconds = totalSec % 60;
     
     if (hours > 0) {
-      return `${hours}s ${minutes.toString().padStart(2, '0')}dk ${seconds.toString().padStart(2, '0')}sn`;
+      return `${hours}h ${minutes.toString().padStart(2, '0')}m ${seconds.toString().padStart(2, '0')}s`;
     }
-    return `${minutes}dk ${seconds.toString().padStart(2, '0')}sn`;
+    return `${minutes}m ${seconds.toString().padStart(2, '0')}s`;
   };
 
   const isTimerActive = powerStatus?.isActive && (powerStatus?.remainingSeconds ?? 0) > 0;
@@ -112,20 +112,21 @@ export const PowerSystemView: React.FC = () => {
           <div className="flex items-center gap-2">
             <h2 className="text-lg font-bold text-white flex items-center gap-2">
               <Power className="w-5 h-5 text-rose-400" />
-              Sistem & Güç Yönetimi
+              System & Power Control
             </h2>
             <span className="px-1.5 py-0.5 text-[10px] font-bold bg-rose-500/20 text-rose-400 rounded-md border border-rose-500/30">
               v2.0
             </span>
           </div>
-          <p className="text-xs text-slate-400">Güç seçenekleri, uyku modu ve zamanlı kapatıcı</p>
+          <p className="text-xs text-slate-400">Workstation power states, sleep mode, and timed shutdown</p>
         </div>
         <button
           onClick={() => {
             vibrate(10);
             requestPowerStatus();
           }}
-          title="Yenile"
+          title="Refresh power status"
+          aria-label="Refresh power status"
           className="p-2 rounded-xl bg-dark-800 hover:bg-dark-700 text-slate-400 hover:text-white border border-slate-700 active:scale-95 transition-all"
         >
           <RefreshCw className="w-4 h-4" />
@@ -142,7 +143,7 @@ export const PowerSystemView: React.FC = () => {
               </div>
               <div>
                 <span className="text-[10px] uppercase font-bold tracking-wider text-amber-400">
-                  {powerStatus.action === 'restart' ? 'Zamanlı Yeniden Başlatma Aktif' : 'Zamanlı Kapanma Aktif'}
+                  {powerStatus.action === 'restart' ? 'Scheduled Restart Active' : 'Scheduled Shutdown Active'}
                 </span>
                 <div className="text-2xl font-black font-mono text-white tracking-tight">
                   {formatCountdown(powerStatus.remainingSeconds)}
@@ -157,21 +158,21 @@ export const PowerSystemView: React.FC = () => {
               }}
               className="px-3.5 py-2 rounded-xl bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/40 active:scale-95 text-xs font-bold transition-all"
             >
-              İptal Et
+              Cancel
             </button>
           </div>
           <p className="text-[11px] text-slate-400 mt-2">
-            Windows {powerStatus.action === 'restart' ? 'yeniden başlatılacak' : 'tamamen kapatılacak'}. İptal etmek için butona dokunabilirsiniz.
+            Windows will {powerStatus.action === 'restart' ? 'restart automatically' : 'shut down completely'}. Tap Cancel at any time.
           </p>
         </div>
       )}
 
-      {/* 3. Timed Shutdown / Sleep Scheduler ("Zamanlı Kapatıcı") */}
+      {/* 3. Timed Shutdown / Sleep Scheduler */}
       <div className="shrink-0 bg-dark-800/80 rounded-3xl p-5 border border-slate-700/60 shadow-xl space-y-4">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2 text-xs font-bold text-slate-200 uppercase tracking-wider">
             <Clock className="w-4 h-4 text-brand-400" />
-            Zamanlı Kapatıcı (Zamanlayıcı)
+            Timed Auto-Shutdown
           </div>
 
           {/* Action toggle (Shutdown vs Restart) */}
@@ -187,7 +188,7 @@ export const PowerSystemView: React.FC = () => {
                   : 'text-slate-400 hover:text-white'
               }`}
             >
-              Kapat
+              Shutdown
             </button>
             <button
               onClick={() => {
@@ -200,7 +201,7 @@ export const PowerSystemView: React.FC = () => {
                   : 'text-slate-400 hover:text-white'
               }`}
             >
-              Yeniden Başlat
+              Restart
             </button>
           </div>
         </div>
@@ -215,12 +216,13 @@ export const PowerSystemView: React.FC = () => {
               setCustomMinutes((m) => Math.max(5, m - 10));
             }}
             className="w-11 h-11 rounded-xl bg-dark-900 border border-slate-700 text-slate-300 font-bold text-xs hover:bg-dark-700 active:scale-95 transition-all flex items-center justify-center"
-            title="10 dakika azalt"
+            title="Decrease by 10 minutes"
+            aria-label="Decrease by 10 minutes"
           >
             -10
           </button>
 
-          {/* Number Input with Dakika Label */}
+          {/* Number Input with Minutes Label */}
           <div className="relative flex-1">
             <input
               type="number"
@@ -229,9 +231,10 @@ export const PowerSystemView: React.FC = () => {
               value={customMinutes}
               onChange={(e) => setCustomMinutes(Math.max(1, parseInt(e.target.value) || 1))}
               className="w-full h-11 bg-dark-900 border border-slate-700 rounded-xl pl-3 pr-14 text-base font-bold text-white font-mono focus:outline-none focus:border-brand-500 text-center"
-              placeholder="Süre"
+              placeholder="Duration"
+              aria-label="Shutdown timer minutes"
             />
-            <span className="absolute right-3 top-3 text-xs text-slate-400 font-medium pointer-events-none">dakika</span>
+            <span className="absolute right-3 top-3 text-xs text-slate-400 font-medium pointer-events-none">min</span>
           </div>
 
           {/* Quick +10m */}
@@ -242,7 +245,8 @@ export const PowerSystemView: React.FC = () => {
               setCustomMinutes((m) => Math.min(720, m + 10));
             }}
             className="w-11 h-11 rounded-xl bg-dark-900 border border-slate-700 text-slate-300 font-bold text-xs hover:bg-dark-700 active:scale-95 transition-all flex items-center justify-center"
-            title="10 dakika artır"
+            title="Increase by 10 minutes"
+            aria-label="Increase by 10 minutes"
           >
             +10
           </button>
@@ -253,7 +257,7 @@ export const PowerSystemView: React.FC = () => {
             className="h-11 px-4 rounded-xl bg-gradient-to-r from-brand-500 to-indigo-600 hover:from-brand-600 hover:to-indigo-700 active:scale-95 text-white font-bold text-xs shadow-md shadow-brand-500/25 transition-all flex items-center gap-1.5"
           >
             <Clock className="w-4 h-4" />
-            Başlat
+            Start
           </button>
         </form>
       </div>
@@ -261,7 +265,7 @@ export const PowerSystemView: React.FC = () => {
       {/* 4. Instant Power Controls */}
       <div className="shrink-0 bg-dark-800/80 rounded-3xl p-5 border border-slate-700/60 shadow-xl space-y-3.5">
         <div className="text-xs font-bold text-slate-200 uppercase tracking-wider">
-          Anlık Güç & Oturum Seçenekleri
+          Instant Power & Session
         </div>
 
         <div className="grid grid-cols-3 gap-2.5">
@@ -269,27 +273,33 @@ export const PowerSystemView: React.FC = () => {
           <button
             onClick={() => handleInstantAction('lock')}
             className="h-20 rounded-2xl bg-dark-900 border border-slate-700 hover:border-sky-500/50 active:bg-sky-950/20 active:scale-95 text-slate-200 flex flex-col items-center justify-center gap-1.5 transition-all shadow-md"
+            title="Lock PC (Win + L)"
+            aria-label="Lock PC"
           >
             <Lock className="w-6 h-6 text-sky-400" />
-            <span className="text-[11px] font-bold">Kilitle</span>
+            <span className="text-[11px] font-bold">Lock</span>
           </button>
 
           {/* Sleep Mode */}
           <button
             onClick={() => handleInstantAction('sleep')}
             className="h-20 rounded-2xl bg-dark-900 border border-slate-700 hover:border-indigo-500/50 active:bg-indigo-950/20 active:scale-95 text-slate-200 flex flex-col items-center justify-center gap-1.5 transition-all shadow-md"
+            title="Put PC to Sleep"
+            aria-label="Sleep Mode"
           >
             <Moon className="w-6 h-6 text-indigo-400" />
-            <span className="text-[11px] font-bold">Uyku Modu</span>
+            <span className="text-[11px] font-bold">Sleep</span>
           </button>
 
           {/* Turn Off Display */}
           <button
             onClick={() => handleInstantAction('displayOff')}
             className="h-20 rounded-2xl bg-dark-900 border border-slate-700 hover:border-purple-500/50 active:bg-purple-950/20 active:scale-95 text-slate-200 flex flex-col items-center justify-center gap-1.5 transition-all shadow-md"
+            title="Turn Off Display"
+            aria-label="Turn Off Display"
           >
             <Monitor className="w-6 h-6 text-purple-400" />
-            <span className="text-[11px] font-bold">Ekranı Kapat</span>
+            <span className="text-[11px] font-bold">Display Off</span>
           </button>
         </div>
 
@@ -299,18 +309,22 @@ export const PowerSystemView: React.FC = () => {
           <button
             onClick={() => promptDangerousAction('restart')}
             className="h-14 rounded-2xl bg-dark-900 border-2 border-amber-600/40 hover:bg-amber-950/20 active:scale-95 text-amber-300 flex items-center justify-center gap-2 font-bold text-xs transition-all shadow-md"
+            title="Restart PC"
+            aria-label="Restart PC"
           >
             <RotateCcw className="w-4 h-4 text-amber-400" />
-            Yeniden Başlat
+            Restart PC
           </button>
 
           {/* Shutdown Button */}
           <button
             onClick={() => promptDangerousAction('shutdown')}
             className="h-14 rounded-2xl bg-dark-900 border-2 border-rose-600/40 hover:bg-rose-950/20 active:scale-95 text-rose-300 flex items-center justify-center gap-2 font-bold text-xs transition-all shadow-md"
+            title="Shut Down PC"
+            aria-label="Shut Down PC"
           >
             <Power className="w-4 h-4 text-rose-400" />
-            Bilgisayarı Kapat
+            Shut Down PC
           </button>
         </div>
       </div>
@@ -318,7 +332,7 @@ export const PowerSystemView: React.FC = () => {
       {/* 5. Windows System Utilities */}
       <div className="shrink-0 bg-dark-800/80 rounded-3xl p-5 border border-slate-700/60 shadow-xl space-y-3.5">
         <div className="text-xs font-bold text-slate-200 uppercase tracking-wider">
-          Windows Kısayolları ve Hızlı Araçlar
+          Windows System Utilities
         </div>
 
         <div className="grid grid-cols-2 gap-2.5">
@@ -326,10 +340,12 @@ export const PowerSystemView: React.FC = () => {
           <button
             onClick={() => handleInstantAction('taskManager')}
             className="h-14 rounded-2xl bg-dark-900 border border-slate-700 hover:border-emerald-500/50 active:scale-95 text-slate-200 flex items-center gap-2.5 px-3.5 transition-all shadow-md"
+            title="Task Manager"
+            aria-label="Task Manager"
           >
             <Activity className="w-5 h-5 text-emerald-400 shrink-0" />
             <div className="text-left">
-              <div className="text-xs font-bold leading-tight">Görev Yöneticisi</div>
+              <div className="text-xs font-bold leading-tight">Task Manager</div>
               <div className="text-[10px] text-slate-500 font-mono">Taskmgr</div>
             </div>
           </button>
@@ -338,10 +354,12 @@ export const PowerSystemView: React.FC = () => {
           <button
             onClick={() => handleInstantAction('showDesktop')}
             className="h-14 rounded-2xl bg-dark-900 border border-slate-700 hover:border-cyan-500/50 active:scale-95 text-slate-200 flex items-center gap-2.5 px-3.5 transition-all shadow-md"
+            title="Show Desktop (Win + D)"
+            aria-label="Show Desktop"
           >
             <Layout className="w-5 h-5 text-cyan-400 shrink-0" />
             <div className="text-left">
-              <div className="text-xs font-bold leading-tight">Masaüstü</div>
+              <div className="text-xs font-bold leading-tight">Show Desktop</div>
               <div className="text-[10px] text-slate-500 font-mono">Win + D</div>
             </div>
           </button>
@@ -350,10 +368,12 @@ export const PowerSystemView: React.FC = () => {
           <button
             onClick={() => handleInstantAction('taskView')}
             className="h-14 rounded-2xl bg-dark-900 border border-slate-700 hover:border-blue-500/50 active:scale-95 text-slate-200 flex items-center gap-2.5 px-3.5 transition-all shadow-md"
+            title="Task View (Win + Tab)"
+            aria-label="Task View"
           >
             <Layers className="w-5 h-5 text-blue-400 shrink-0" />
             <div className="text-left">
-              <div className="text-xs font-bold leading-tight">Görev Görünümü</div>
+              <div className="text-xs font-bold leading-tight">Task View</div>
               <div className="text-[10px] text-slate-500 font-mono">Win + Tab</div>
             </div>
           </button>
@@ -362,10 +382,12 @@ export const PowerSystemView: React.FC = () => {
           <button
             onClick={() => handleInstantAction('screenshot')}
             className="h-14 rounded-2xl bg-dark-900 border border-slate-700 hover:border-amber-500/50 active:scale-95 text-slate-200 flex items-center gap-2.5 px-3.5 transition-all shadow-md"
+            title="Snipping Tool / Screenshot"
+            aria-label="Screenshot"
           >
             <Camera className="w-5 h-5 text-amber-400 shrink-0" />
             <div className="text-left">
-              <div className="text-xs font-bold leading-tight">Ekran Alıntısı</div>
+              <div className="text-xs font-bold leading-tight">Screenshot</div>
               <div className="text-[10px] text-slate-500 font-mono">Win+Shift+S</div>
             </div>
           </button>
@@ -374,7 +396,7 @@ export const PowerSystemView: React.FC = () => {
 
       {/* Safety Confirmation Modal */}
       {confirmDialog.isOpen && (
-        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-md flex items-center justify-center p-4 animate-fadeIn">
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 animate-fadeIn">
           <div className="w-full max-w-sm bg-dark-900 border-2 border-rose-500/50 rounded-3xl p-6 shadow-2xl space-y-4 animate-scaleUp">
             <div className="flex items-center gap-3">
               <div className="w-12 h-12 rounded-2xl bg-rose-500/20 border border-rose-500/40 flex items-center justify-center shrink-0">
@@ -382,7 +404,7 @@ export const PowerSystemView: React.FC = () => {
               </div>
               <div>
                 <h3 className="text-base font-bold text-white">{confirmDialog.title}</h3>
-                <p className="text-xs text-rose-400 font-medium">Onay Gerekiyor</p>
+                <p className="text-xs text-rose-400 font-semibold tracking-wide uppercase">Confirmation Required</p>
               </div>
             </div>
 
@@ -395,13 +417,13 @@ export const PowerSystemView: React.FC = () => {
                 onClick={() => setConfirmDialog({ isOpen: false, action: null, title: '', description: '' })}
                 className="flex-1 h-12 rounded-2xl bg-dark-800 hover:bg-dark-700 text-slate-300 font-bold text-xs border border-slate-700 active:scale-95 transition-all"
               >
-                Vazgeç
+                Cancel
               </button>
               <button
                 onClick={confirmDangerousAction}
                 className="flex-1 h-12 rounded-2xl bg-gradient-to-r from-rose-600 to-rose-700 hover:from-rose-500 hover:to-rose-600 text-white font-bold text-xs shadow-lg shadow-rose-600/30 active:scale-95 transition-all"
               >
-                Evet, Onayla
+                Yes, Proceed
               </button>
             </div>
           </div>

@@ -17,7 +17,7 @@ import {
 
 export const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState<TabType>('home');
-  const { status, isAuthenticated } = useConnectionStore();
+  const { status, isAuthenticated, latency } = useConnectionStore();
 
   useEffect(() => {
     // Attempt auto-connect on startup
@@ -76,22 +76,22 @@ export const App: React.FC = () => {
   return (
     <div className="flex flex-col h-full w-full bg-dark-900 text-slate-100 select-none overflow-hidden">
       {/* Top Header with iOS Safe Area */}
-      <header className="shrink-0 bg-dark-800/80 backdrop-blur-xl border-b border-slate-800/80 px-4 pt-3 pb-3 safe-top">
+      <header className="shrink-0 bg-dark-900/95 backdrop-blur-2xl border-b border-slate-800/80 px-4 pt-3 pb-2.5 safe-top z-30">
         <div className="flex items-center justify-between max-w-md mx-auto">
-          <div className="flex items-center gap-2">
-            <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-brand-600 to-cyan-400 flex items-center justify-center shadow-lg shadow-brand-500/20">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-brand-600 via-indigo-500 to-cyan-400 flex items-center justify-center shadow-lg shadow-brand-500/20">
               <Smartphone className="w-4 h-4 text-white" />
             </div>
             <div>
-              <h1 className="text-sm font-bold text-white tracking-tight flex items-center gap-1.5">
+              <h1 className="text-sm font-bold text-white tracking-tight flex items-center gap-1.5 leading-none">
                 Remote Suite
-                <span className="text-[10px] font-normal text-slate-400 bg-slate-800 px-1.5 py-0.5 rounded">v1.0</span>
+                <span className="text-[9px] font-mono text-slate-400 bg-slate-800/80 px-1 py-0.5 rounded border border-slate-700/60">v1.0</span>
               </h1>
-              <p className="text-[11px] text-slate-400">iPhone to Windows Hub</p>
+              <p className="text-[10px] text-slate-400 font-medium mt-0.5">iPhone to Windows Hub</p>
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5">
             {status === 'connected' && (
               <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold border ${
                 isAuthenticated 
@@ -102,12 +102,46 @@ export const App: React.FC = () => {
                 {isAuthenticated ? 'Paired' : 'Unpaired'}
               </span>
             )}
-            <div className={`w-2.5 h-2.5 rounded-full ${
-              status === 'connected' ? 'bg-emerald-400 shadow-md shadow-emerald-400/50' : 
-              status === 'connecting' || status === 'reconnecting' ? 'bg-amber-400 animate-ping' : 
-              'bg-rose-500'
-            }`} />
-            <span className="text-xs font-medium text-slate-300 capitalize">{status}</span>
+
+            {/* Real-time Connection Quality & Instant Reconnect Pill */}
+            <button
+              onClick={() => {
+                if (status === 'disconnected') {
+                  if ('vibrate' in navigator) navigator.vibrate(10);
+                  wsClient.connect();
+                }
+              }}
+              disabled={status === 'connecting' || status === 'reconnecting'}
+              aria-label={`Connection Status: ${status}${latency !== null ? `, Latency: ${latency}ms` : ''}`}
+              className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-mono font-semibold border transition-all active:scale-95 ${
+                status === 'connected'
+                  ? latency !== null && latency > 90
+                    ? 'bg-amber-500/10 text-amber-300 border-amber-500/30'
+                    : 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30'
+                  : status === 'connecting' || status === 'reconnecting'
+                  ? 'bg-amber-500/10 text-amber-400 border-amber-500/30 animate-pulse'
+                  : 'bg-rose-500/15 text-rose-300 border-rose-500/40 hover:bg-rose-500/25 cursor-pointer shadow-sm shadow-rose-950/40'
+              }`}
+            >
+              <span className={`w-2 h-2 rounded-full ${
+                status === 'connected' 
+                  ? latency !== null && latency > 90 
+                    ? 'bg-amber-400 shadow-sm shadow-amber-400/50' 
+                    : 'bg-emerald-400 shadow-sm shadow-emerald-400/60 animate-pulse'
+                  : status === 'connecting' || status === 'reconnecting' 
+                  ? 'bg-amber-400 animate-ping'
+                  : 'bg-rose-500'
+              }`} />
+              <span>
+                {status === 'connected'
+                  ? latency !== null ? `${latency} ms` : 'Connected'
+                  : status === 'reconnecting'
+                  ? 'Reconnecting...'
+                  : status === 'connecting'
+                  ? 'Connecting...'
+                  : 'Reconnect'}
+              </span>
+            </button>
           </div>
         </div>
       </header>
