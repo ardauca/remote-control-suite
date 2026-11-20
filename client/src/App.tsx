@@ -1,10 +1,12 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { wsClient } from './protocol/wsClient';
 import { useConnectionStore } from './stores/connectionStore';
 import { ConnectionStatusCard } from './features/status/ConnectionStatusCard';
 import { PairingModal } from './features/status/PairingModal';
+import { FeatureAccessGate } from './features/status/FeatureAccessGate';
 import { NavigationBar, TabType } from './features/navigation/NavigationBar';
 import { TouchpadView } from './features/touchpad/TouchpadView';
+import { KeyboardControlBar } from './features/keyboard/KeyboardControlBar';
 import { ScreenView } from './features/screen/ScreenView';
 import { MediaControlView } from './features/media/MediaControlView';
 import { PowerSystemView } from './features/power/PowerSystemView';
@@ -16,8 +18,27 @@ import {
 } from 'lucide-react';
 
 export const App: React.FC = () => {
-  const [activeTab, setActiveTab] = useState<TabType>('home');
+  const [activeTab, setActiveTab] = useState<TabType>('remote');
+  const [isPairingOpen, setIsPairingOpen] = useState(false);
+  const [autoFocusKeyboard, setAutoFocusKeyboard] = useState(false);
+  const [keyboardOpenedFromScreen, setKeyboardOpenedFromScreen] = useState(false);
   const { status, isAuthenticated, latency } = useConnectionStore();
+
+  const openKeyboardForTyping = useCallback(() => {
+    setAutoFocusKeyboard(true);
+    setKeyboardOpenedFromScreen(true);
+    setActiveTab('keyboard');
+  }, []);
+
+  const handleTabChange = useCallback((tab: TabType) => {
+    if (tab === 'keyboard') {
+      setAutoFocusKeyboard(true);
+      setKeyboardOpenedFromScreen(false);
+    } else {
+      setKeyboardOpenedFromScreen(false);
+    }
+    setActiveTab(tab);
+  }, []);
 
   useEffect(() => {
     // Attempt auto-connect on startup
@@ -27,6 +48,14 @@ export const App: React.FC = () => {
       // Cleanup on unmount
     };
   }, []);
+
+  useEffect(() => {
+    if (status === 'connected' && !isAuthenticated) {
+      setIsPairingOpen(true);
+    } else if (isAuthenticated) {
+      setIsPairingOpen(false);
+    }
+  }, [status, isAuthenticated]);
 
   // Screen Wake Lock: Keep phone screen awake while connected to prevent auto-lock during remote control
   useEffect(() => {
@@ -85,7 +114,7 @@ export const App: React.FC = () => {
             <div>
               <h1 className="text-sm font-bold text-white tracking-tight flex items-center gap-1.5 leading-none">
                 Remote Suite
-                <span className="text-[9px] font-mono text-slate-400 bg-slate-800/80 px-1 py-0.5 rounded border border-slate-700/60">v1.0</span>
+                <span className="text-[9px] font-mono text-slate-400 bg-slate-800/80 px-1 py-0.5 rounded border border-slate-700/60">v1.3</span>
               </h1>
               <p className="text-[10px] text-slate-400 font-medium mt-0.5">iPhone to Windows Hub</p>
             </div>
@@ -147,7 +176,10 @@ export const App: React.FC = () => {
       </header>
 
       {/* Pairing Modal (Active when connected and unauthenticated) */}
-      <PairingModal />
+      <PairingModal
+        isOpen={isPairingOpen}
+        onClose={() => setIsPairingOpen(false)}
+      />
 
       {/* Main View Area */}
       <main className={`flex-1 ${
@@ -157,48 +189,95 @@ export const App: React.FC = () => {
           ? 'overflow-y-auto px-3 py-3 space-y-3'
           : 'overflow-y-auto px-4 py-4 space-y-4'
       }`}>
-        {activeTab === 'home' && (
+        {activeTab === 'more' && (
           <div className="max-w-md mx-auto space-y-4">
-            <ConnectionStatusCard />
+            <FeatureAccessGate onPair={() => setIsPairingOpen(true)}>
+              <PowerSystemView />
+            </FeatureAccessGate>
 
-            {/* Quick Guide Card */}
-            <div className="bg-dark-800/50 rounded-2xl p-4 border border-slate-800 text-xs space-y-2">
+            <ConnectionStatusCard onPair={() => setIsPairingOpen(true)} />
+
+            <div className="bg-dark-800/50 rounded-2xl p-4 border border-slate-800 text-xs space-y-3">
               <h3 className="font-semibold text-slate-200 flex items-center gap-1.5">
-                <CheckCircle className="w-4 h-4 text-emerald-400" />
-                Phase 1-7 Acceptance Milestones
+                {isAuthenticated
+                  ? <CheckCircle className="w-4 h-4 text-emerald-400" />
+                  : <ShieldAlert className="w-4 h-4 text-amber-400" />}
+                {isAuthenticated ? 'Your PC is ready' : 'Get started'}
               </h3>
-              <ul className="text-slate-400 space-y-1.5 list-disc list-inside">
-                <li>.NET 9 Windows Agent with Kestrel Web/WS server running</li>
-                <li>Real-time bidirectional WebSocket at <code className="text-brand-400">/ws</code></li>
-                <li>Virtual Trackpad & Gesture Mouse Control (Phase 3)</li>
-                <li>Raw & Unicode Keyboard Input with IME Support (Phase 4)</li>
-                <li>WASAPI Volume, Per-App Audio & GSMTC Now Playing Media (Phase 5)</li>
-                <li>System Power & Timed Shutdown Scheduler (Phase 6)</li>
-                <li>Ultra-Low Latency Screen Mirroring & Remote Touch (Phase 7)</li>
-              </ul>
+              {isAuthenticated ? (
+                <>
+                  <p className="text-slate-400">Choose what you want to control.</p>
+                  <div className="grid grid-cols-2 gap-2">
+                    {([
+                      ['remote', 'Touchpad', 'Move the mouse and click'],
+                      ['keyboard', 'Keyboard', 'Type and use shortcuts'],
+                      ['screen', 'Screen', 'View and tap your PC screen'],
+                      ['media', 'Media', 'Control playback and volume'],
+                    ] as const).map(([tab, title, description]) => (
+                      <button
+                        key={tab}
+                        type="button"
+                        onClick={() => handleTabChange(tab)}
+                        className="rounded-xl border border-slate-700/80 bg-dark-900/70 p-3 text-left transition-colors hover:border-brand-500/50 hover:bg-dark-900"
+                      >
+                        <span className="block font-semibold text-slate-100">{title}</span>
+                        <span className="mt-1 block text-[10px] leading-relaxed text-slate-400">{description}</span>
+                      </button>
+                    ))}
+                  </div>
+                </>
+              ) : (
+                <ol className="space-y-2 text-slate-400">
+                  <li><span className="mr-2 font-semibold text-brand-400">1.</span>Connect to your Windows PC using its local address.</li>
+                  <li><span className="mr-2 font-semibold text-brand-400">2.</span>Enter the pairing PIN shown in the PC dashboard.</li>
+                  <li><span className="mr-2 font-semibold text-brand-400">3.</span>Choose Touchpad, Keyboard, Screen or Media below.</li>
+                </ol>
+              )}
             </div>
           </div>
         )}
 
         {activeTab === 'remote' && (
-          <TouchpadView />
+          <FeatureAccessGate onPair={() => setIsPairingOpen(true)}>
+            <TouchpadView />
+          </FeatureAccessGate>
+        )}
+
+        {activeTab === 'keyboard' && (
+          <FeatureAccessGate onPair={() => setIsPairingOpen(true)}>
+            <div className="mx-auto w-full max-w-md space-y-3 pb-16">
+              <div className="px-1">
+                <h2 className="text-lg font-bold text-white">Keyboard & Shortcuts</h2>
+                <p className="mt-1 text-xs text-slate-400">
+                  {keyboardOpenedFromScreen
+                    ? 'PC text field selected. Type here; if the phone keyboard stays hidden, tap the input. Return to Screen when done.'
+                    : 'Type on your PC or send a shortcut.'}
+                </p>
+              </div>
+              <KeyboardControlBar
+                autoFocusInput={autoFocusKeyboard}
+                onAutoFocusHandled={() => setAutoFocusKeyboard(false)}
+              />
+            </div>
+          </FeatureAccessGate>
         )}
 
         {activeTab === 'screen' && (
-          <ScreenView />
+          <FeatureAccessGate onPair={() => setIsPairingOpen(true)}>
+            <ScreenView onTextInputFocus={openKeyboardForTyping} />
+          </FeatureAccessGate>
         )}
 
         {activeTab === 'media' && (
-          <MediaControlView />
+          <FeatureAccessGate onPair={() => setIsPairingOpen(true)}>
+            <MediaControlView />
+          </FeatureAccessGate>
         )}
 
-        {activeTab === 'more' && (
-          <PowerSystemView />
-        )}
       </main>
 
       {/* Bottom Mobile Navigation */}
-      <NavigationBar activeTab={activeTab} onTabChange={setActiveTab} />
+      <NavigationBar activeTab={activeTab} onTabChange={handleTabChange} />
     </div>
   );
 };

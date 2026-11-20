@@ -1,7 +1,7 @@
 import React from 'react';
-import { Home, MousePointer, Monitor, PlaySquare, Power } from 'lucide-react';
+import { Keyboard, Menu, Monitor, MousePointer, PlaySquare } from 'lucide-react';
 
-export type TabType = 'home' | 'remote' | 'screen' | 'media' | 'more';
+export type TabType = 'remote' | 'keyboard' | 'screen' | 'media' | 'more';
 
 interface NavigationBarProps {
   activeTab: TabType;
@@ -10,11 +10,11 @@ interface NavigationBarProps {
 
 export const NavigationBar: React.FC<NavigationBarProps> = ({ activeTab, onTabChange }) => {
   const tabs = [
-    { id: 'home' as TabType, label: 'Home', icon: Home },
     { id: 'remote' as TabType, label: 'Touchpad', icon: MousePointer },
+    { id: 'keyboard' as TabType, label: 'Keyboard', icon: Keyboard },
     { id: 'screen' as TabType, label: 'Screen', icon: Monitor },
     { id: 'media' as TabType, label: 'Media', icon: PlaySquare },
-    { id: 'more' as TabType, label: 'Power', icon: Power },
+    { id: 'more' as TabType, label: 'More', icon: Menu },
   ];
 
   const handleSelectTab = (id: TabType) => {
@@ -35,8 +35,8 @@ export const NavigationBar: React.FC<NavigationBarProps> = ({ activeTab, onTabCh
               key={tab.id}
               onClick={() => handleSelectTab(tab.id)}
               aria-label={tab.label}
-              aria-selected={isActive}
-              role="tab"
+              aria-current={isActive ? 'page' : undefined}
+              aria-pressed={isActive}
               className={`flex flex-col items-center justify-center w-16 py-1 px-1 rounded-2xl transition-all duration-150 active:scale-95 ${
                 isActive
                   ? 'text-brand-400 font-semibold bg-brand-500/15 shadow-sm shadow-brand-500/10 border border-brand-500/25'

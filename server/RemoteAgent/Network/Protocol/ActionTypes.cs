@@ -50,6 +50,7 @@ public static class ActionTypes
     public const string ScreenStop = "screen.stop";
     public const string ScreenSnapshot = "screen.snapshot";
     public const string ScreenTouch = "screen.touch";
+    public const string ScreenTextInputFocus = "screen.textInputFocus";
     public const string ScreenTelemetry = "screen.telemetry";
     public const string ScreenMonitors = "screen.monitors";
 }

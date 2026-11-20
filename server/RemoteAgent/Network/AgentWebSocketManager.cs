@@ -29,6 +29,7 @@ public class AgentWebSocketManager
 
     private readonly ConcurrentDictionary<string, ActiveConnection> _connections = new();
     private readonly ConcurrentDictionary<string, ClientSessionInfo> _sessions = new();
+    private readonly ConcurrentDictionary<string, long> _lastMouseAckAt = new();
 
     private readonly JsonSerializerOptions _jsonOptions = new()
     {
@@ -227,6 +228,7 @@ public class AgentWebSocketManager
         {
             _connections.TryRemove(connectionId, out _);
             _sessions.TryRemove(connectionId, out _);
+            _lastMouseAckAt.TryRemove(connectionId, out _);
             _screenCoordinator.StopStream(connectionId);
             _inputSimulator.ReleaseConnectionKeys(connectionId);
             if (_connections.IsEmpty)
@@ -489,7 +491,34 @@ public class AgentWebSocketManager
                         int dy = movePayload.TryGetProperty("dy", out var dyProp) && dyProp.ValueKind == JsonValueKind.Number ? dyProp.GetInt32() : 0;
                         dx = Math.Clamp(dx, -2000, 2000);
                         dy = Math.Clamp(dy, -2000, 2000);
-                        _inputSimulator.MoveMouseRelative(dx, dy);
+                        var accepted = _inputSimulator.MoveMouseRelative(dx, dy);
+
+                        // Acknowledge at most twice per second so a touchpad drag does not
+                        // flood the WebSocket with diagnostic messages.
+                        var now = Environment.TickCount64;
+                        var shouldAck = false;
+                        if (_lastMouseAckAt.TryGetValue(conn.ConnectionId, out var previousAckAt))
+                        {
+                            if (now - previousAckAt >= 500)
+                            {
+                                shouldAck = _lastMouseAckAt.TryUpdate(conn.ConnectionId, now, previousAckAt);
+                            }
+                        }
+                        else
+                        {
+                            shouldAck = _lastMouseAckAt.TryAdd(conn.ConnectionId, now);
+                        }
+
+                        if (shouldAck)
+                        {
+                            await SendJsonAsync(conn, MessageEnvelope<object>.Create("event", "input.mouseAck", new
+                            {
+                                accepted,
+                                dx,
+                                dy,
+                                serverTime = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+                            }), CancellationToken.None);
+                        }
                     }
                     break;
 
@@ -623,15 +652,22 @@ public class AgentWebSocketManager
                 case ActionTypes.VolumeSetMaster:
                     if (root.TryGetProperty("payload", out var setMasterPayload))
                     {
+                        float? vol = null;
+                        bool? mute = null;
+
                         if (setMasterPayload.TryGetProperty("volume", out var volProp) && volProp.ValueKind == JsonValueKind.Number)
                         {
-                            float vol = Math.Clamp((float)volProp.GetDouble(), 0f, 100f);
-                            _audioManager.SetMasterVolume(vol);
+                            vol = Math.Clamp((float)volProp.GetDouble(), 0f, 100f);
                         }
                         if (setMasterPayload.TryGetProperty("mute", out var muteProp) &&
                             (muteProp.ValueKind == JsonValueKind.True || muteProp.ValueKind == JsonValueKind.False))
                         {
-                            _audioManager.SetMasterMute(muteProp.GetBoolean());
+                            mute = muteProp.GetBoolean();
+                        }
+
+                        if (vol.HasValue || mute.HasValue)
+                        {
+                            _audioManager.SetMaster(vol, mute);
                         }
                     }
                     break;
@@ -642,15 +678,22 @@ public class AgentWebSocketManager
                         var sessionId = setSessionPayload.TryGetProperty("sessionId", out var idProp) ? idProp.GetString() ?? "" : "";
                         if (sessionId.Length > 256) sessionId = sessionId[..256];
 
+                        float? vol = null;
+                        bool? mute = null;
+
                         if (setSessionPayload.TryGetProperty("volume", out var volProp) && volProp.ValueKind == JsonValueKind.Number)
                         {
-                            float vol = Math.Clamp((float)volProp.GetDouble(), 0f, 100f);
-                            _audioManager.SetSessionVolume(sessionId, vol);
+                            vol = Math.Clamp((float)volProp.GetDouble(), 0f, 100f);
                         }
                         if (setSessionPayload.TryGetProperty("mute", out var muteProp) &&
                             (muteProp.ValueKind == JsonValueKind.True || muteProp.ValueKind == JsonValueKind.False))
                         {
-                            _audioManager.SetSessionMute(sessionId, muteProp.GetBoolean());
+                            mute = muteProp.GetBoolean();
+                        }
+
+                        if (vol.HasValue || mute.HasValue)
+                        {
+                            _audioManager.SetSession(sessionId, vol, mute);
                         }
                     }
                     break;
@@ -827,13 +870,16 @@ public class AgentWebSocketManager
 
                             _inputSimulator.MoveMouseAbsolute(absX, absY);
 
+                            bool detectTextInputFocus = false;
                             switch (tType.ToLowerInvariant())
                             {
                                 case "click":
                                     _inputSimulator.MouseClick(tBtn, false);
+                                    detectTextInputFocus = tBtn.Equals("left", StringComparison.OrdinalIgnoreCase);
                                     break;
                                 case "double":
                                     _inputSimulator.MouseClick(tBtn, true);
+                                    detectTextInputFocus = tBtn.Equals("left", StringComparison.OrdinalIgnoreCase);
                                     break;
                                 case "right":
                                     _inputSimulator.MouseClick("right", false);
@@ -847,6 +893,22 @@ public class AgentWebSocketManager
                                 case "move":
                                     // position already updated
                                     break;
+                            }
+
+                            if (detectTextInputFocus)
+                            {
+                                // Give the target app time to update focus; some UI Automation providers lag behind the click.
+                                bool textInputFocused = false;
+                                for (var attempt = 0; attempt < 4 && !textInputFocused; attempt++)
+                                {
+                                    await Task.Delay(100);
+                                    textInputFocused = FocusedTextInputDetector.IsTextInputFocused();
+                                }
+                                _logger.LogDebug("Remote screen click text-input detection: {Focused} for {ConnectionId}", textInputFocused, connectionId);
+                                await SendJsonAsync(
+                                    conn,
+                                    MessageEnvelope<object>.Create("event", ActionTypes.ScreenTextInputFocus, new { focused = textInputFocused }),
+                                    CancellationToken.None);
                             }
                         }
                     }

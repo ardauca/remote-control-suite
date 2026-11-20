@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useMediaStore } from '../../stores/mediaStore';
+import { useConnectionStore } from '../../stores/connectionStore';
 import { wsClient } from '../../protocol/wsClient';
 import { 
   Play, 
@@ -36,13 +37,17 @@ export const MediaControlView: React.FC = () => {
     executeMediaAction 
   } = useMediaStore();
 
+  const connectionStatus = useConnectionStore((s) => s.status);
+  const isAuthenticated = useConnectionStore((s) => s.isAuthenticated);
   const [launchedApp, setLaunchedApp] = useState<string | null>(null);
 
-  // Poll / request state on mount
+  // Poll / request state on mount and when connection/auth becomes active
   useEffect(() => {
-    wsClient.send('command', 'volume.requestState', {});
-    wsClient.send('command', 'media.requestNowPlaying', {});
-  }, []);
+    if (connectionStatus === 'connected' && isAuthenticated) {
+      wsClient.send('command', 'volume.requestState', {});
+      wsClient.send('command', 'media.requestNowPlaying', {});
+    }
+  }, [connectionStatus, isAuthenticated]);
 
   const masterVol = volumeState?.masterVolume ?? 50;
   const isMuted = volumeState?.isMuted ?? false;

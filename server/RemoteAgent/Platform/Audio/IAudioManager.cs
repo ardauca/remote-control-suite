@@ -5,8 +5,10 @@ namespace RemoteAgent.Platform.Audio;
 public interface IAudioManager : IDisposable
 {
     VolumeStatePayload GetVolumeState();
+    void SetMaster(float? volume, bool? isMuted);
     void SetMasterVolume(float volume);
     void SetMasterMute(bool isMuted);
+    void SetSession(string sessionId, float? volume, bool? isMuted);
     void SetSessionVolume(string sessionId, float volume);
     void SetSessionMute(string sessionId, bool isMuted);
 

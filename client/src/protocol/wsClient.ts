@@ -44,6 +44,19 @@ class WebSocketClient {
   private binaryHandlers = new Set<(buffer: ArrayBuffer) => void>();
   private isManuallyClosed = false;
 
+  private pointerDiagnostics = {
+    attempted: 0,
+    sent: 0,
+    blocked: 0,
+    errors: 0,
+    lastAttemptAt: null as number | null,
+    lastSentAt: null as number | null,
+    lastDelta: null as { dx: number; dy: number } | null,
+    windowsAccepted: 0,
+    windowsRejected: 0,
+    lastWindowsAck: null as { accepted: boolean; dx: number; dy: number; at: number } | null
+  };
+
   private readonly MIN_RECONNECT_DELAY = 500;
   private readonly MAX_RECONNECT_DELAY = 3000;
   private readonly HEARTBEAT_INTERVAL = 4000;
@@ -113,10 +126,26 @@ class WebSocketClient {
     return this.socket !== null && this.socket.readyState === WebSocket.OPEN;
   }
 
+  public getPointerDiagnostics() {
+    return { ...this.pointerDiagnostics };
+  }
+
   private fastMsgSeq = 0;
 
   public send<T>(type: 'command' | 'event' | 'response' | 'heartbeat', action: string, payload: T) {
+    const isPointerMove = action === 'mouse.move';
+    if (isPointerMove) {
+      const move = payload as { dx?: unknown; dy?: unknown } | null;
+      this.pointerDiagnostics.attempted += 1;
+      this.pointerDiagnostics.lastAttemptAt = Date.now();
+      this.pointerDiagnostics.lastDelta = {
+        dx: typeof move?.dx === 'number' ? move.dx : 0,
+        dy: typeof move?.dy === 'number' ? move.dy : 0
+      };
+    }
+
     if (!this.isConnected()) {
+      if (isPointerMove) this.pointerDiagnostics.blocked += 1;
       useConnectionStore.getState().addLog('warn', `Cannot send ${action}: Not connected`);
       return;
     }
@@ -132,7 +161,12 @@ class WebSocketClient {
 
     try {
       this.socket!.send(JSON.stringify(envelope));
+      if (isPointerMove) {
+        this.pointerDiagnostics.sent += 1;
+        this.pointerDiagnostics.lastSentAt = Date.now();
+      }
     } catch (err) {
+      if (isPointerMove) this.pointerDiagnostics.errors += 1;
       useConnectionStore.getState().addLog('error', `Send error for ${action}: ${err}`);
     }
   }
@@ -189,6 +223,22 @@ class WebSocketClient {
 
       const envelope = JSON.parse(event.data) as MessageEnvelope;
       const store = useConnectionStore.getState();
+
+      if (envelope.action === 'input.mouseAck') {
+        const ack = envelope.payload as { accepted?: unknown; dx?: unknown; dy?: unknown };
+        const accepted = ack?.accepted === true;
+        this.pointerDiagnostics.lastWindowsAck = {
+          accepted,
+          dx: typeof ack?.dx === 'number' ? ack.dx : 0,
+          dy: typeof ack?.dy === 'number' ? ack.dy : 0,
+          at: Date.now()
+        };
+        if (accepted) this.pointerDiagnostics.windowsAccepted += 1;
+        else {
+          this.pointerDiagnostics.windowsRejected += 1;
+          store.addLog('error', 'Windows rejected mouse movement (SendInput returned 0).');
+        }
+      }
 
       // Built-in protocol actions
       if (envelope.action === 'system.hello') {

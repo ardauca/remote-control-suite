@@ -7,7 +7,6 @@ import {
   ShortcutDefinition 
 } from './MacroManager';
 import { 
-  Send, 
   Delete, 
   CornerDownLeft, 
   ArrowLeft, 
@@ -24,7 +23,12 @@ import {
 
 type ModifierState = 'IDLE' | 'STICKY' | 'LOCKED';
 
-export const KeyboardControlBar: React.FC = () => {
+interface KeyboardControlBarProps {
+  autoFocusInput?: boolean;
+  onAutoFocusHandled?: () => void;
+}
+
+export const KeyboardControlBar: React.FC<KeyboardControlBarProps> = ({ autoFocusInput = false, onAutoFocusHandled }) => {
   const connectionStatus = useConnectionStore((s) => s.status);
   const [textInput, setTextInput] = useState('');
   const [modifiers, setModifiers] = useState<Record<string, ModifierState>>({
@@ -46,6 +50,15 @@ export const KeyboardControlBar: React.FC = () => {
 
   const inputRef = useRef<HTMLInputElement>(null);
   const isComposingRef = useRef(false);
+  const pendingTextRef = useRef('');
+  const sendTextTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (autoFocusInput) {
+      inputRef.current?.focus();
+      onAutoFocusHandled?.();
+    }
+  }, [autoFocusInput, onAutoFocusHandled]);
 
   // Auto release modifiers on cleanup or disconnect
   useEffect(() => {
@@ -126,51 +139,83 @@ export const KeyboardControlBar: React.FC = () => {
     }, 25);
   };
 
-  // Direct Native Text Typing with Composition (IME / Turkish Accents / Emojis) Support
+  // Batch native text input so iOS dictation and predictive text send their final phrase once.
+  const flushPendingText = () => {
+    if (sendTextTimerRef.current !== null) {
+      window.clearTimeout(sendTextTimerRef.current);
+      sendTextTimerRef.current = null;
+    }
+
+    const text = pendingTextRef.current;
+    if (!text) return;
+
+    pendingTextRef.current = '';
+    setTextInput('');
+    wsClient.send('command', 'keyboard.text', { text });
+    releaseStickyModifiers();
+  };
+
+  const scheduleTextFlush = (text: string, delayMs: number) => {
+    pendingTextRef.current = text;
+    if (sendTextTimerRef.current !== null) {
+      window.clearTimeout(sendTextTimerRef.current);
+    }
+    sendTextTimerRef.current = window.setTimeout(flushPendingText, delayMs);
+  };
+
+  // Direct native text typing with composition (IME / Turkish accents / emoji) support.
   const handleCompositionStart = () => {
     isComposingRef.current = true;
+    if (sendTextTimerRef.current !== null) {
+      window.clearTimeout(sendTextTimerRef.current);
+      sendTextTimerRef.current = null;
+    }
   };
 
   const handleCompositionEnd = (e: React.CompositionEvent<HTMLInputElement>) => {
     isComposingRef.current = false;
-    const val = e.data || (e.target as HTMLInputElement).value;
-    if (val) {
-      wsClient.send('command', 'keyboard.text', { text: val });
-      releaseStickyModifiers();
-      setTextInput('');
-    }
+    const val = e.currentTarget.value || `${pendingTextRef.current}${e.data}`;
+    if (val) scheduleTextFlush(val, 80);
   };
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = e.target.value;
     setTextInput(val);
 
-    // If composition (predictive text / accent selection) is not in progress, send immediately
+    if (!isComposingRef.current && !val) {
+      pendingTextRef.current = '';
+      if (sendTextTimerRef.current !== null) {
+        window.clearTimeout(sendTextTimerRef.current);
+        sendTextTimerRef.current = null;
+      }
+      return;
+    }
+
     if (!isComposingRef.current && val) {
-      wsClient.send('command', 'keyboard.text', { text: val });
-      releaseStickyModifiers();
-      setTextInput('');
+      const inputType = (e.nativeEvent as InputEvent).inputType?.toLowerCase() ?? '';
+      const isDictation = inputType.includes('dictation');
+      const delayMs = isDictation ? 900 : val.length > 1 ? 300 : 120;
+      scheduleTextFlush(val, delayMs);
     }
   };
 
   // iOS Safari Virtual Keyboard Backspace and hardware shortcuts
   const handleBeforeInput = (e: React.FormEvent<HTMLInputElement>) => {
     const native = e.nativeEvent as InputEvent;
-    if (native && native.inputType === 'deleteContentBackward') {
+    if (native && native.inputType === 'deleteContentBackward' && !e.currentTarget.value) {
       sendSpecialKey('BACKSPACE');
     }
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Backspace' && !textInput) {
+    if (e.nativeEvent.isComposing || isComposingRef.current) return;
+
+    if (e.key === 'Backspace' && !e.currentTarget.value) {
       e.preventDefault();
       sendSpecialKey('BACKSPACE');
     } else if (e.key === 'Enter') {
       e.preventDefault();
-      if (textInput) {
-        wsClient.send('command', 'keyboard.text', { text: textInput });
-        setTextInput('');
-      }
+      flushPendingText();
       sendSpecialKey('ENTER');
     } else if (e.key === 'Tab') {
       e.preventDefault();
@@ -180,6 +225,13 @@ export const KeyboardControlBar: React.FC = () => {
       sendSpecialKey('ESC');
     }
   };
+
+  useEffect(() => () => {
+    if (sendTextTimerRef.current !== null) window.clearTimeout(sendTextTimerRef.current);
+    const pending = pendingTextRef.current;
+    if (pending) wsClient.send('command', 'keyboard.text', { text: pending });
+    pendingTextRef.current = '';
+  }, []);
 
   // Execute quick shortcut without unintended modifier merging
   const handleShortcut = (keys: string[]) => {
@@ -214,6 +266,7 @@ export const KeyboardControlBar: React.FC = () => {
       <div className="bg-dark-800/90 rounded-2xl p-2.5 border border-slate-700/80 shadow-lg flex items-center gap-2">
         <input
           ref={inputRef}
+          autoFocus={autoFocusInput}
           type="text"
           value={textInput}
           onChange={handleInputChange}
@@ -221,11 +274,13 @@ export const KeyboardControlBar: React.FC = () => {
           onBeforeInput={handleBeforeInput}
           onCompositionStart={handleCompositionStart}
           onCompositionEnd={handleCompositionEnd}
-          autoCapitalize="none"
-          autoCorrect="off"
-          spellCheck="false"
+          onBlur={flushPendingText}
+          autoCapitalize="off"
+          autoCorrect="on"
+          spellCheck={true}
           enterKeyHint="send"
-          placeholder="Tap here to type on PC (Turkish / Emoji supported)..."
+          aria-label="Type or dictate text to the PC"
+          placeholder="Type or dictate to PC (Turkish / emoji supported)..."
           className="flex-1 bg-dark-900/90 text-white placeholder-slate-500 text-xs px-3.5 py-2.5 rounded-xl border border-slate-700 focus:outline-none focus:border-brand-500 font-sans"
         />
         {/* Dismiss keyboard button for iOS */}
@@ -242,18 +297,17 @@ export const KeyboardControlBar: React.FC = () => {
           <ChevronDown className="w-4 h-4" />
         </button>
         <button
+          type="button"
           onClick={() => {
-            if (textInput) {
-              if ('vibrate' in navigator) navigator.vibrate(8);
-              wsClient.send('command', 'keyboard.text', { text: textInput });
-              setTextInput('');
-              releaseStickyModifiers();
-            }
+            if ('vibrate' in navigator) navigator.vibrate(8);
+            flushPendingText();
+            sendSpecialKey('ENTER');
           }}
-          aria-label="Send Text"
+          title="Send text and press Enter"
+          aria-label="Send text and press Enter"
           className="p-2.5 rounded-xl bg-brand-500 hover:bg-brand-600 text-white shadow-md shadow-brand-500/20 active:scale-95 transition-all shrink-0"
         >
-          <Send className="w-4 h-4" />
+          <CornerDownLeft className="w-4 h-4" />
         </button>
       </div>
 

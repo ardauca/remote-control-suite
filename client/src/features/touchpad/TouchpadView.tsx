@@ -1,13 +1,10 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { wsClient } from '../../protocol/wsClient';
 import { useConnectionStore } from '../../stores/connectionStore';
-import { KeyboardControlBar } from '../keyboard/KeyboardControlBar';
 import { 
   Sliders, 
   Move, 
   MousePointerClick,
-  MousePointer,
-  Keyboard,
   HelpCircle,
   RotateCcw,
   ChevronUp,
@@ -26,9 +23,6 @@ export const TouchpadView: React.FC = () => {
   const touchpadRef = useRef<HTMLDivElement>(null);
   const touchTrackerRef = useRef<HTMLDivElement>(null);
   const padRectRef = useRef<{ left: number; top: number; width: number; height: number }>({ left: 0, top: 0, width: 0, height: 0 });
-
-  // Mode: Touchpad or Keyboard
-  const [activeMode, setActiveMode] = useState<'touchpad' | 'keyboard'>('touchpad');
 
   // Settings State (persisted in localStorage)
   const [sensitivity, setSensitivity] = useState<number>(() => {
@@ -185,7 +179,7 @@ export const TouchpadView: React.FC = () => {
       pad.removeEventListener('gesturechange', preventGestures);
       pad.removeEventListener('gestureend', preventGestures);
     };
-  }, [activeMode]);
+  }, []);
 
   const handleResetSettings = useCallback(() => {
     if ('vibrate' in navigator) navigator.vibrate(10);
@@ -343,8 +337,8 @@ export const TouchpadView: React.FC = () => {
 
         if (Math.abs(dyRaw) > 0.3) {
           stateRef.current.hasMoved = true;
-          // Up = Scroll UP (positive delta), Down = Scroll DOWN (negative delta)
-          stateRef.current.edgeScrollAccumulator -= dyRaw;
+          // Reverse the wheel direction so both scroll gestures follow the same convention.
+          stateRef.current.edgeScrollAccumulator += dyRaw;
 
           const threshold = 12; // 12px accumulator per notch
           if (Math.abs(stateRef.current.edgeScrollAccumulator) >= threshold) {
@@ -516,40 +510,7 @@ export const TouchpadView: React.FC = () => {
       className="flex flex-col h-full w-full select-none overflow-hidden space-y-2"
       style={{ touchAction: 'none', userSelect: 'none', WebkitUserSelect: 'none', overscrollBehavior: 'none' }}
     >
-      {/* Mode Switcher: Touchpad vs Keyboard */}
-      <div className="flex bg-dark-950 p-1 rounded-2xl border border-slate-800 shrink-0">
-        <button
-          onClick={() => setActiveMode('touchpad')}
-          className={`flex-1 py-1.5 text-xs font-semibold rounded-xl flex items-center justify-center gap-1.5 transition-all ${
-            activeMode === 'touchpad'
-              ? 'bg-brand-500 text-white shadow-md shadow-brand-500/25'
-              : 'text-slate-400 hover:text-slate-200'
-          }`}
-        >
-          <MousePointer className="w-3.5 h-3.5" />
-          Touchpad
-        </button>
-        <button
-          onClick={() => setActiveMode('keyboard')}
-          className={`flex-1 py-1.5 text-xs font-semibold rounded-xl flex items-center justify-center gap-1.5 transition-all ${
-            activeMode === 'keyboard'
-              ? 'bg-brand-500 text-white shadow-md shadow-brand-500/25'
-              : 'text-slate-400 hover:text-slate-200'
-          }`}
-        >
-          <Keyboard className="w-3.5 h-3.5" />
-          Keyboard & Shortcuts
-        </button>
-      </div>
-
-      {/* KEYBOARD VIEW */}
-      {activeMode === 'keyboard' ? (
-        <div className="flex-1 overflow-y-auto pr-0.5">
-          <KeyboardControlBar />
-        </div>
-      ) : (
-        /* TOUCHPAD VIEW */
-        <div className="flex-1 flex flex-col overflow-hidden space-y-2">
+      <div className="flex-1 flex flex-col overflow-hidden space-y-2">
           {/* Top Status & Controls Header */}
           <div className="flex items-center justify-between px-1 shrink-0">
             <div className="flex items-center gap-2">
@@ -794,8 +755,7 @@ export const TouchpadView: React.FC = () => {
               </div>
             </button>
           </div>
-        </div>
-      )}
+      </div>
     </div>
   );
 };

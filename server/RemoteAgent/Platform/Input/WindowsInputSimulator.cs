@@ -114,9 +114,9 @@ public class WindowsInputSimulator : IInputSimulator
 
     // ================= MOUSE CONTROLS =================
 
-    public void MoveMouseRelative(int dx, int dy)
+    public bool MoveMouseRelative(int dx, int dy)
     {
-        if (dx == 0 && dy == 0) return;
+        if (dx == 0 && dy == 0) return true;
 
         var input = new NativeMethods.INPUT
         {
@@ -134,7 +134,12 @@ public class WindowsInputSimulator : IInputSimulator
                 }
             }
         };
-        NativeMethods.SendInput(1, new[] { input }, InputSize);
+        var inserted = NativeMethods.SendInput(1, new[] { input }, InputSize);
+        if (inserted == 1) return true;
+
+        _logger.LogWarning("Windows rejected relative mouse movement ({Dx}, {Dy}). SendInput inserted {Inserted}; last error: {LastError}",
+            dx, dy, inserted, System.Runtime.InteropServices.Marshal.GetLastWin32Error());
+        return false;
     }
 
     public void MoveMouseAbsolute(int x, int y)

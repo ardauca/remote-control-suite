@@ -94,10 +94,13 @@ jobs:
             Write-Host ">>> 5/6: verify-rate-limiting.js"
             node scripts/verify-rate-limiting.js
 
-            Write-Host ">>> 6/6: verify-screen.js"
+            Write-Host ">>> 6/7: verify-screen.js"
             node scripts/verify-screen.js
 
-            Write-Host ">>> ALL 6 AUTOMATED SMOKE TESTS COMPLETED SUCCESSFULLY! <<<"
+            Write-Host ">>> 7/7: verify-media-volume.js"
+            node scripts/verify-media-volume.js
+
+            Write-Host ">>> ALL 7 AUTOMATED SMOKE TESTS COMPLETED SUCCESSFULLY! <<<"
           }
           finally {
             Write-Host "Gracefully stopping RemoteAgent..."

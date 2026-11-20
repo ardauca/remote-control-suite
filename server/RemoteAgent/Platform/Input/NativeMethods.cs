@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using System.Text;
 
 namespace RemoteAgent.Platform.Input;
 
@@ -102,4 +103,33 @@ internal static class NativeMethods
         public int X;
         public int Y;
     }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct RECT
+    {
+        public int Left;
+        public int Top;
+        public int Right;
+        public int Bottom;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct GUITHREADINFO
+    {
+        public uint cbSize;
+        public uint flags;
+        public IntPtr hwndActive;
+        public IntPtr hwndFocus;
+        public IntPtr hwndCapture;
+        public IntPtr hwndMenuOwner;
+        public IntPtr hwndMoveSize;
+        public IntPtr hwndCaret;
+        public RECT rcCaret;
+    }
+
+    [DllImport("user32.dll", SetLastError = true)]
+    internal static extern bool GetGUIThreadInfo(uint idThread, ref GUITHREADINFO threadInfo);
+
+    [DllImport("user32.dll", CharSet = CharSet.Auto)]
+    internal static extern int GetClassName(IntPtr hWnd, StringBuilder className, int maxCount);
 }

@@ -3,7 +3,7 @@ namespace RemoteAgent.Platform.Input;
 public interface IInputSimulator
 {
     // Mouse
-    void MoveMouseRelative(int dx, int dy);
+    bool MoveMouseRelative(int dx, int dy);
     void MoveMouseAbsolute(int x, int y);
     void MouseDown(string button, string? connectionId = null);
     void MouseUp(string button, string? connectionId = null);

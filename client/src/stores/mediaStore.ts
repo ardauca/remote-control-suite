@@ -25,40 +25,51 @@ export const useMediaStore = create<MediaState>((set, get) => ({
 
   setMasterVolume: (volume, mute) => {
     const current = get().volumeState;
-    if (current) {
-      set({
-        volumeState: {
-          ...current,
-          masterVolume: volume,
-          isMuted: mute !== undefined ? mute : current.isMuted
-        }
-      });
+    const shouldUnmute = current?.isMuted && volume > 0;
+    const effectiveMute = mute !== undefined ? mute : (shouldUnmute ? false : current?.isMuted ?? false);
+
+    set({
+      volumeState: {
+        masterVolume: volume,
+        isMuted: effectiveMute,
+        sessions: current?.sessions ?? []
+      }
+    });
+
+    const payload: { volume: number; mute?: boolean } = { volume };
+    if (mute !== undefined || shouldUnmute) {
+      payload.mute = effectiveMute;
     }
-    wsClient.send('command', 'volume.setMaster', { volume, mute });
+    wsClient.send('command', 'volume.setMaster', payload);
   },
 
   toggleMasterMute: () => {
     const current = get().volumeState;
-    if (!current) return;
-    const nextMute = !current.isMuted;
+    const currentVol = current ? current.masterVolume : 50;
+    const nextMute = current ? !current.isMuted : true;
     set({
       volumeState: {
-        ...current,
-        isMuted: nextMute
+        masterVolume: currentVol,
+        isMuted: nextMute,
+        sessions: current ? current.sessions : []
       }
     });
-    wsClient.send('command', 'volume.setMaster', { volume: current.masterVolume, mute: nextMute });
+    wsClient.send('command', 'volume.setMaster', { volume: currentVol, mute: nextMute });
   },
 
   setSessionVolume: (sessionId, volume, mute) => {
     const current = get().volumeState;
+    const currentSession = current?.sessions.find((session) => session.id === sessionId);
+    const shouldUnmute = currentSession?.isMuted === true && volume > 0;
     if (current) {
       const updatedSessions = current.sessions.map((s) => {
         if (s.id === sessionId) {
+          const shouldUnmute = s.isMuted && volume > 0;
+          const effectiveMute = mute !== undefined ? mute : (shouldUnmute ? false : s.isMuted);
           return {
             ...s,
             volume,
-            isMuted: mute !== undefined ? mute : s.isMuted
+            isMuted: effectiveMute
           };
         }
         return s;
@@ -70,7 +81,11 @@ export const useMediaStore = create<MediaState>((set, get) => ({
         }
       });
     }
-    wsClient.send('command', 'volume.setSession', { sessionId, volume, mute });
+    const payload: { sessionId: string; volume: number; mute?: boolean } = { sessionId, volume };
+    if (mute !== undefined || shouldUnmute) {
+      payload.mute = mute ?? false;
+    }
+    wsClient.send('command', 'volume.setSession', payload);
   },
 
   toggleSessionMute: (sessionId) => {

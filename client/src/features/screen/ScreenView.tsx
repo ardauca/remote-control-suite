@@ -20,7 +20,11 @@ import {
   X
 } from 'lucide-react';
 
-export const ScreenView: React.FC = () => {
+interface ScreenViewProps {
+  onTextInputFocus: () => void;
+}
+
+export const ScreenView: React.FC<ScreenViewProps> = ({ onTextInputFocus }) => {
   const { 
     isStreaming, 
     activePreset, 
@@ -39,6 +43,9 @@ export const ScreenView: React.FC = () => {
   const wrapperRef = useRef<HTMLDivElement | null>(null);
 
   const lastSeqRef = useRef<number>(0);
+  const lastFrameAtRef = useRef(0);
+  const frameStalledRef = useRef(false);
+  const [frameStalled, setFrameStalled] = useState(false);
   const [cursorPos, setCursorPos] = useState<{ x: number; y: number; visible: boolean }>({ x: 50, y: 50, visible: false });
   const [desktopDims, setDesktopDims] = useState<{ width: number; height: number }>({ width: 1920, height: 1080 });
   const [boxDims, setBoxDims] = useState<{ width: number; height: number }>({ width: 320, height: 180 });
@@ -137,6 +144,11 @@ export const ScreenView: React.FC = () => {
       return;
     }
     lastSeqRef.current = frame.sequenceNumber;
+    lastFrameAtRef.current = Date.now();
+    if (frameStalledRef.current) {
+      frameStalledRef.current = false;
+      setFrameStalled(false);
+    }
 
     if (desktopDimsRef.current.width !== frame.desktopWidth || desktopDimsRef.current.height !== frame.desktopHeight) {
       desktopDimsRef.current = { width: frame.desktopWidth, height: frame.desktopHeight };
@@ -207,6 +219,19 @@ export const ScreenView: React.FC = () => {
     };
   }, []);
 
+  useEffect(() => {
+    return wsClient.on('screen.textInputFocus', (envelope) => {
+      const payload = envelope.payload as { focused?: boolean } | undefined;
+      useConnectionStore.getState().addLog(
+        payload?.focused ? 'success' : 'info',
+        payload?.focused
+          ? 'PC text field detected; opening the keyboard.'
+          : 'Screen click received, but Windows did not report a text field.'
+      );
+      if (payload?.focused) onTextInputFocus();
+    });
+  }, [onTextInputFocus]);
+
   // 3. Stream lifecycle: Start on mount, stop ONLY on unmount
   useEffect(() => {
     lastSeqRef.current = 0;
@@ -255,6 +280,25 @@ export const ScreenView: React.FC = () => {
 
   // 5. Re-start screen streaming automatically if connection drops and reconnects
   const connectionStatus = useConnectionStore((s) => s.status);
+  useEffect(() => {
+    if (!isStreaming || activePreset === 'snapshot' || connectionStatus !== 'connected') {
+      frameStalledRef.current = false;
+      setFrameStalled(false);
+      return;
+    }
+
+    lastFrameAtRef.current = Date.now();
+    const watchdog = window.setInterval(() => {
+      const stalled = Date.now() - lastFrameAtRef.current > 4000;
+      if (stalled !== frameStalledRef.current) {
+        frameStalledRef.current = stalled;
+        setFrameStalled(stalled);
+      }
+    }, 1000);
+
+    return () => window.clearInterval(watchdog);
+  }, [isStreaming, activePreset, connectionStatus]);
+
   const prevStatusRef = useRef(connectionStatus);
   useEffect(() => {
     if (prevStatusRef.current !== 'connected' && connectionStatus === 'connected') {
@@ -532,6 +576,13 @@ export const ScreenView: React.FC = () => {
             >
               <path d="M3 3l7 18 3-7 7-3L3 3z" />
             </svg>
+          </div>
+        )}
+
+        {frameStalled && (
+          <div className="pointer-events-none absolute inset-x-3 bottom-3 z-20 rounded-xl border border-amber-400/30 bg-dark-950/90 px-3 py-2 text-center shadow-lg backdrop-blur-sm">
+            <p className="text-[11px] font-semibold text-amber-200">Screen temporarily unavailable</p>
+            <p className="mt-0.5 text-[10px] leading-snug text-slate-300">If a Windows security prompt is open, approve it on the PC. Screen control resumes when it closes.</p>
           </div>
         )}
       </div>

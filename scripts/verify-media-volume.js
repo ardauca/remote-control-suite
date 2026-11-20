@@ -74,6 +74,18 @@ async function runTest() {
   }
   console.log('✔ Capabilities volume.control & media.control verified.');
 
+  // Authenticate session
+  const token = process.env.AUTH_TOKEN || 'test_benchmark_token_2026';
+  sendMsg(ws, 'auth.login', { token });
+  const authResult = await waitForAction(ws, 'auth.result');
+  if (!authResult.payload.authenticated) {
+    throw new Error('Auth failed in verify-media-volume.js: ' + authResult.payload.message);
+  }
+  console.log('✔ Authenticated successfully.');
+
+  // Drain initial states sent on auth
+  await new Promise(r => setTimeout(r, 200));
+
   // 2. Initial Volume State
   console.log('\n[1/4] Testing Volume State Request & WASAPI Session Enumeration...');
   sendMsg(ws, 'volume.requestState');
@@ -91,19 +103,58 @@ async function runTest() {
   console.log('\n[2/4] Testing Master Volume Set & Real-Time WASAPI Notification...');
   const testVolume = 35;
   sendMsg(ws, 'volume.setMaster', { volume: testVolume, mute: false });
-  const updatedVol = await waitForAction(ws, 'volume.state');
+  const updatedVol = await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('Timeout waiting for master volume update to ' + testVolume)), 4000);
+    const onMsg = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        if (data.action === 'volume.state' && Math.abs(data.payload.masterVolume - testVolume) <= 1 && data.payload.isMuted === false) {
+          clearTimeout(timer);
+          ws.removeEventListener('message', onMsg);
+          resolve(data);
+        }
+      } catch (e) {}
+    };
+    ws.addEventListener('message', onMsg);
+  });
   console.log(`✔ Received Updated Volume State: ${updatedVol.payload.masterVolume}% (Target: ${testVolume}%)`);
 
   // Test Mute
   console.log('Testing Master Mute...');
   sendMsg(ws, 'volume.setMaster', { volume: testVolume, mute: true });
-  const mutedVol = await waitForAction(ws, 'volume.state');
+  const mutedVol = await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('Timeout waiting for master volume mute update')), 4000);
+    const onMsg = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        if (data.action === 'volume.state' && data.payload.isMuted === true) {
+          clearTimeout(timer);
+          ws.removeEventListener('message', onMsg);
+          resolve(data);
+        }
+      } catch (e) {}
+    };
+    ws.addEventListener('message', onMsg);
+  });
   console.log(`✔ Received Muted Volume State: isMuted = ${mutedVol.payload.isMuted}`);
 
   // Restore original volume
   console.log('Restoring original volume state...');
   sendMsg(ws, 'volume.setMaster', { volume: originalVolume, mute: originalMute });
-  await waitForAction(ws, 'volume.state');
+  await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('Timeout restoring master volume')), 4000);
+    const onMsg = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        if (data.action === 'volume.state' && Math.abs(data.payload.masterVolume - originalVolume) <= 1) {
+          clearTimeout(timer);
+          ws.removeEventListener('message', onMsg);
+          resolve(data);
+        }
+      } catch (e) {}
+    };
+    ws.addEventListener('message', onMsg);
+  });
   console.log(`✔ Restored master volume to ${originalVolume}%`);
 
   // 4. Test Per-Application Session Volume Control (if sessions exist)

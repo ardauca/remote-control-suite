@@ -7,13 +7,16 @@ import {
   Activity, 
   Server, 
   RefreshCw, 
-  Terminal, 
-  ChevronDown, 
-  ChevronUp, 
-  ShieldCheck
+  ShieldCheck,
+  Clipboard,
+  Check
 } from 'lucide-react';
 
-export const ConnectionStatusCard: React.FC = () => {
+interface ConnectionStatusCardProps {
+  onPair: () => void;
+}
+
+export const ConnectionStatusCard: React.FC<ConnectionStatusCardProps> = ({ onPair }) => {
   const { 
     status, 
     serverUrl, 
@@ -21,13 +24,65 @@ export const ConnectionStatusCard: React.FC = () => {
     serverInfo, 
     reconnectAttempts, 
     logs, 
-    setServerUrl, 
-    clearLogs 
+    isAuthenticated,
+    deviceName,
+    setServerUrl
   } = useConnectionStore();
 
   const [inputUrl, setInputUrl] = useState(serverUrl);
-  const [showLogs, setShowLogs] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [diagnosticsCopied, setDiagnosticsCopied] = useState(false);
+
+  const copyDiagnostics = async () => {
+    const pointer = wsClient.getPointerDiagnostics();
+    const diagnostics = [
+      'Remote Suite connection diagnostics',
+      'Client version: 1.3',
+      `Time: ${new Date().toISOString()}`,
+      `Status: ${status}`,
+      `Authorized: ${isAuthenticated ? `Yes (${deviceName || 'Paired Device'})` : 'No'}`,
+      `Server: ${serverInfo?.serverName || 'Unknown'} (${serverInfo?.os || 'Unknown OS'})`,
+      `WebSocket: ${serverUrl}`,
+      `Latency: ${latency === null ? 'Unavailable' : `${latency} ms`}`,
+      `Reconnect attempts: ${reconnectAttempts}`,
+      `Touchpad mouse.move: ${pointer.attempted} attempted, ${pointer.sent} sent, ${pointer.blocked} blocked, ${pointer.errors} send errors`,
+      `Last pointer delta: ${pointer.lastDelta ? `${pointer.lastDelta.dx}, ${pointer.lastDelta.dy}` : 'None'}`,
+      `Last pointer send: ${pointer.lastSentAt ? new Date(pointer.lastSentAt).toISOString() : 'None'}`,
+      `Windows mouse input: ${pointer.windowsAccepted} accepted, ${pointer.windowsRejected} rejected`,
+      `Last Windows mouse ack: ${pointer.lastWindowsAck ? `${pointer.lastWindowsAck.accepted ? 'accepted' : 'REJECTED'} (${pointer.lastWindowsAck.dx}, ${pointer.lastWindowsAck.dy}) at ${new Date(pointer.lastWindowsAck.at).toISOString()}` : 'None (no mouse movement reached the Windows input handler)'}`,
+      '',
+      'Recent events:',
+      ...(logs.length > 0
+        ? logs.slice(0, 30).map((log) => `${log.time} [${log.level.toUpperCase()}] ${log.message}`)
+        : ['No connection events recorded'])
+    ].join('\n');
+
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(diagnostics);
+      } else {
+        const temporaryInput = document.createElement('textarea');
+        temporaryInput.value = diagnostics;
+        temporaryInput.readOnly = true;
+        temporaryInput.style.position = 'fixed';
+        temporaryInput.style.opacity = '0';
+        temporaryInput.style.fontSize = '16px';
+        document.body.appendChild(temporaryInput);
+        temporaryInput.focus();
+        temporaryInput.select();
+        temporaryInput.setSelectionRange(0, temporaryInput.value.length);
+        const copied = document.execCommand('copy');
+        temporaryInput.remove();
+        if (!copied) throw new Error('Clipboard copy was rejected');
+      }
+
+      setDiagnosticsCopied(true);
+      window.setTimeout(() => setDiagnosticsCopied(false), 2500);
+    } catch {
+      setDiagnosticsCopied(false);
+      useConnectionStore.getState().addLog('warn', 'Could not copy diagnostics. Please try again.');
+    }
+  };
 
   const handleConnect = (e: React.FormEvent) => {
     e.preventDefault();
@@ -182,14 +237,14 @@ export const ConnectionStatusCard: React.FC = () => {
         {/* Security & Pairing Status Banner */}
         <div className="pt-2 border-t border-slate-800/60 flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <div className={`w-2 h-2 rounded-full ${useConnectionStore.getState().isAuthenticated ? 'bg-emerald-400' : 'bg-amber-400'}`} />
+            <div className={`w-2 h-2 rounded-full ${isAuthenticated ? 'bg-emerald-400' : 'bg-amber-400'}`} />
             <span className="text-xs text-slate-300">
-              {useConnectionStore.getState().isAuthenticated 
-                ? `Authorized (${useConnectionStore.getState().deviceName || 'Paired Device'})` 
-                : 'Unpaired (PIN Required)'}
+              {isAuthenticated
+                ? `Authorized (${deviceName || 'Paired Device'})`
+                : status === 'connected' ? 'Pair this device to enable controls' : 'Pairing is available after connecting'}
             </span>
           </div>
-          {useConnectionStore.getState().isAuthenticated && (
+          {isAuthenticated ? (
             <button
               onClick={() => {
                 useConnectionStore.getState().clearAuth();
@@ -199,7 +254,15 @@ export const ConnectionStatusCard: React.FC = () => {
             >
               Unpair
             </button>
-          )}
+          ) : status === 'connected' ? (
+            <button
+              type="button"
+              onClick={onPair}
+              className="rounded-lg bg-brand-500/15 px-2.5 py-1.5 text-[11px] font-semibold text-brand-300 transition-colors hover:bg-brand-500/25"
+            >
+              Pair now
+            </button>
+          ) : null}
         </div>
 
         {/* Quick Actions */}
@@ -257,52 +320,14 @@ export const ConnectionStatusCard: React.FC = () => {
         </form>
       )}
 
-      {/* Live Diagnostics & Heartbeat Logs Drawer */}
-      <div className="bg-dark-800/60 rounded-2xl border border-slate-800/80 overflow-hidden">
-        <button
-          onClick={() => setShowLogs(!showLogs)}
-          className="w-full flex items-center justify-between p-3.5 text-xs font-medium text-slate-400 hover:text-slate-200 transition-colors"
-        >
-          <div className="flex items-center gap-2">
-            <Terminal className="w-4 h-4 text-cyan-400" />
-            <span>Connection Diagnostics ({logs.length})</span>
-          </div>
-          {showLogs ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-        </button>
-
-        {showLogs && (
-          <div className="p-3 border-t border-slate-800 bg-dark-900/90 font-mono text-[11px] space-y-1.5 max-h-48 overflow-y-auto">
-            <div className="flex justify-between items-center pb-1 mb-1 border-b border-slate-800 text-[10px] text-slate-500">
-              <span>LIVE LOG STREAM</span>
-              <button onClick={clearLogs} className="hover:text-slate-300 underline">
-                Clear
-              </button>
-            </div>
-            {logs.length === 0 ? (
-              <div className="text-slate-600 py-2 text-center">No logs recorded yet</div>
-            ) : (
-              logs.map((log) => (
-                <div key={log.id} className="flex items-start gap-2 leading-tight">
-                  <span className="text-slate-500 shrink-0">{log.time}</span>
-                  <span
-                    className={
-                      log.level === 'success'
-                        ? 'text-emerald-400'
-                        : log.level === 'warn'
-                        ? 'text-amber-400'
-                        : log.level === 'error'
-                        ? 'text-rose-400'
-                        : 'text-slate-300'
-                    }
-                  >
-                    {log.message}
-                  </span>
-                </div>
-              ))
-            )}
-          </div>
-        )}
-      </div>
+      <button
+        type="button"
+        onClick={copyDiagnostics}
+        className="w-full flex items-center justify-center gap-2 rounded-2xl border border-slate-800/80 bg-dark-800/60 p-3.5 text-xs font-medium text-slate-300 transition-colors hover:bg-dark-800 hover:text-white active:scale-[0.99]"
+      >
+        {diagnosticsCopied ? <Check className="h-4 w-4 text-emerald-400" /> : <Clipboard className="h-4 w-4 text-cyan-400" />}
+        <span>{diagnosticsCopied ? 'Diagnostics copied' : `Copy diagnostics (${logs.length})`}</span>
+      </button>
     </div>
   );
 };

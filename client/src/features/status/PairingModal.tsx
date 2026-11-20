@@ -1,9 +1,14 @@
 import React, { useState } from 'react';
 import { useConnectionStore } from '../../stores/connectionStore';
 import { wsClient } from '../../protocol/wsClient';
-import { ShieldCheck, ShieldAlert, KeyRound, Smartphone } from 'lucide-react';
+import { ShieldCheck, ShieldAlert, KeyRound, Smartphone, X } from 'lucide-react';
 
-export const PairingModal: React.FC = () => {
+interface PairingModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+}
+
+export const PairingModal: React.FC<PairingModalProps> = ({ isOpen, onClose }) => {
   const { 
     status, 
     isAuthenticated, 
@@ -17,8 +22,21 @@ export const PairingModal: React.FC = () => {
   );
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // Only display when connected but unauthenticated
-  if (status !== 'connected') {
+  React.useEffect(() => {
+    if (authError || isAuthenticated) setIsSubmitting(false);
+  }, [authError, isAuthenticated]);
+
+  React.useEffect(() => {
+    if (!isOpen || status !== 'connected') return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, status, onClose]);
+
+  // Only display when explicitly opened for an active, unpaired connection.
+  if (!isOpen || status !== 'connected') {
     return null;
   }
 
@@ -27,8 +45,9 @@ export const PairingModal: React.FC = () => {
     const cleanDigits = pin.replace(/\D/g, '');
     if (cleanDigits.length < 6) return;
     setIsSubmitting(true);
+    useConnectionStore.getState().setAuthError(null);
     wsClient.pair(cleanDigits, deviceLabel);
-    setTimeout(() => setIsSubmitting(false), 800);
+    window.setTimeout(() => setIsSubmitting(false), 10000);
   };
 
   if (isAuthenticated) {
@@ -36,17 +55,25 @@ export const PairingModal: React.FC = () => {
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-fadeIn">
-      <div className="w-full max-w-sm bg-dark-900 border border-slate-700/80 rounded-3xl p-6 shadow-2xl space-y-5">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm animate-fadeIn" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div role="dialog" aria-modal="true" aria-labelledby="pairing-title" className="relative w-full max-w-sm bg-dark-900 border border-slate-700/80 rounded-3xl p-6 shadow-2xl space-y-5">
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Close pairing"
+          className="absolute right-4 top-4 rounded-lg p-2 text-slate-400 transition-colors hover:bg-slate-800 hover:text-white"
+        >
+          <X className="h-4 w-4" />
+        </button>
         <div className="text-center space-y-2">
           <div className="w-14 h-14 mx-auto rounded-2xl bg-brand-500/10 border border-brand-500/30 flex items-center justify-center text-brand-400">
             <KeyRound className="w-7 h-7" />
           </div>
-          <h2 className="text-lg font-bold text-white tracking-tight">
+          <h2 id="pairing-title" className="text-lg font-bold text-white tracking-tight">
             Pair with {serverInfo ? serverInfo.serverName : 'Windows PC'}
           </h2>
-          <p className="text-xs text-slate-400">
-            Enter the 6-digit PIN shown on your PC dashboard to unlock remote control.
+          <p className="text-xs text-slate-400 px-3">
+            Enter the 6-digit PIN shown on your PC dashboard. You can close this window and pair later from Home.
           </p>
         </div>
 
@@ -59,11 +86,14 @@ export const PairingModal: React.FC = () => {
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="space-y-1.5">
-            <label className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
+            <label htmlFor="pairing-pin" className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
               Pairing PIN
             </label>
             <input
               type="text"
+              id="pairing-pin"
+              name="pairing-pin"
+              autoComplete="one-time-code"
               inputMode="numeric"
               pattern="[0-9]*"
               maxLength={7}
@@ -83,12 +113,14 @@ export const PairingModal: React.FC = () => {
           </div>
 
           <div className="space-y-1.5">
-            <label className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
+            <label htmlFor="device-name" className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
               Device Name
             </label>
             <div className="relative">
               <input
                 type="text"
+                id="device-name"
+                name="device-name"
                 value={deviceLabel}
                 onChange={(e) => setDeviceLabel(e.target.value)}
                 maxLength={30}
@@ -103,7 +135,7 @@ export const PairingModal: React.FC = () => {
             disabled={pin.replace(/\D/g, '').length < 6 || isSubmitting}
             className="w-full py-3 px-4 rounded-2xl font-bold text-xs bg-gradient-to-r from-brand-600 to-cyan-500 hover:from-brand-500 hover:to-cyan-400 active:scale-95 text-white shadow-lg shadow-brand-500/30 border border-brand-400/30 transition-all disabled:opacity-40 disabled:pointer-events-none"
           >
-            {isSubmitting ? 'Verifying PIN...' : 'Pair Device & Connect'}
+            {isSubmitting ? 'Checking PIN…' : 'Pair this device'}
           </button>
         </form>
 

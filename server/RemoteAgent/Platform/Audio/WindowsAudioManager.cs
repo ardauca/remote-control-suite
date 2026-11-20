@@ -19,27 +19,93 @@ public class WindowsAudioManager : IAudioManager
     {
         _logger = logger;
         _deviceEnumerator = new MMDeviceEnumerator();
-        InitializeDevice();
+        lock (_lock)
+        {
+            GetOrRefreshDefaultDevice();
+        }
     }
 
-    private void InitializeDevice()
+    private MMDevice? GetOrRefreshDefaultDevice()
     {
-        lock (_lock)
+        MMDevice? currentDefault = null;
+        try
+        {
+            currentDefault = _deviceEnumerator.GetDefaultAudioEndpoint(DataFlow.Render, Role.Multimedia);
+
+            if (_defaultPlaybackDevice != null)
+            {
+                try
+                {
+                    if (_defaultPlaybackDevice.State == DeviceState.Active &&
+                        string.Equals(_defaultPlaybackDevice.ID, currentDefault.ID, StringComparison.OrdinalIgnoreCase))
+                    {
+                        currentDefault.Dispose();
+                        return _defaultPlaybackDevice;
+                    }
+                }
+                catch
+                {
+                    // The cached endpoint can become invalid while Windows changes playback devices.
+                }
+            }
+
+            DetachCurrentDevice();
+            _defaultPlaybackDevice = currentDefault;
+            currentDefault = null;
+
+            if (_defaultPlaybackDevice != null)
+            {
+                _volumeNotificationDelegate = new AudioEndpointVolumeNotificationDelegate(OnAudioEndpointVolumeNotification);
+                _defaultPlaybackDevice.AudioEndpointVolume.OnVolumeNotification += _volumeNotificationDelegate;
+                _logger.LogInformation("WindowsAudioManager initialized with device: {DeviceName}", _defaultPlaybackDevice.FriendlyName);
+            }
+            return _defaultPlaybackDevice;
+        }
+        catch (Exception ex)
+        {
+            try { currentDefault?.Dispose(); } catch { }
+            _logger.LogWarning(ex, "Failed to acquire the current default audio playback device");
+
+            // Keep using the cached endpoint if Windows temporarily fails to enumerate the current default.
+            try
+            {
+                if (_defaultPlaybackDevice?.State == DeviceState.Active)
+                {
+                    return _defaultPlaybackDevice;
+                }
+            }
+            catch { }
+
+            DetachCurrentDevice();
+            return null;
+        }
+    }
+
+    private void DetachCurrentDevice()
+    {
+        if (_defaultPlaybackDevice != null)
         {
             try
             {
-                _defaultPlaybackDevice = _deviceEnumerator.GetDefaultAudioEndpoint(DataFlow.Render, Role.Multimedia);
-                if (_defaultPlaybackDevice != null)
+                if (_volumeNotificationDelegate != null)
                 {
-                    _volumeNotificationDelegate = new AudioEndpointVolumeNotificationDelegate(OnAudioEndpointVolumeNotification);
-                    _defaultPlaybackDevice.AudioEndpointVolume.OnVolumeNotification += _volumeNotificationDelegate;
-                    _logger.LogInformation("WindowsAudioManager initialized with device: {DeviceName}", _defaultPlaybackDevice.FriendlyName);
+                    _defaultPlaybackDevice.AudioEndpointVolume.OnVolumeNotification -= _volumeNotificationDelegate;
                 }
             }
-            catch (Exception ex)
+            catch
             {
-                _logger.LogWarning(ex, "Failed to initialize default audio playback device");
+                // Ignore cleanup errors on stale device
             }
+            try
+            {
+                _defaultPlaybackDevice.Dispose();
+            }
+            catch
+            {
+                // Ignore
+            }
+            _defaultPlaybackDevice = null;
+            _volumeNotificationDelegate = null;
         }
     }
 
@@ -64,22 +130,18 @@ public class WindowsAudioManager : IAudioManager
 
             try
             {
-                if (_defaultPlaybackDevice == null)
-                {
-                    _defaultPlaybackDevice = _deviceEnumerator.GetDefaultAudioEndpoint(DataFlow.Render, Role.Multimedia);
-                }
-
-                if (_defaultPlaybackDevice == null)
+                var device = GetOrRefreshDefaultDevice();
+                if (device == null)
                 {
                     return result;
                 }
 
                 // Master volume
-                result.MasterVolume = MathF.Round(_defaultPlaybackDevice.AudioEndpointVolume.MasterVolumeLevelScalar * 100f, 1);
-                result.IsMuted = _defaultPlaybackDevice.AudioEndpointVolume.Mute;
+                result.MasterVolume = MathF.Round(device.AudioEndpointVolume.MasterVolumeLevelScalar * 100f, 1);
+                result.IsMuted = device.AudioEndpointVolume.Mute;
 
                 // Application sessions
-                var sessionManager = _defaultPlaybackDevice.AudioSessionManager;
+                var sessionManager = device.AudioSessionManager;
                 if (sessionManager != null)
                 {
                     var sessions = sessionManager.Sessions;
@@ -135,38 +197,73 @@ public class WindowsAudioManager : IAudioManager
         }
     }
 
-    public void SetMasterVolume(float volume)
+    public void SetMaster(float? volume, bool? isMuted)
     {
         lock (_lock)
         {
             try
             {
-                if (_defaultPlaybackDevice == null) return;
-                var clamped = Math.Clamp(volume / 100f, 0.0f, 1.0f);
-                _defaultPlaybackDevice.AudioEndpointVolume.MasterVolumeLevelScalar = clamped;
+                var device = GetOrRefreshDefaultDevice();
+                if (device == null) return;
+
+                bool modified = false;
+
+                if (volume.HasValue)
+                {
+                    var clamped = Math.Clamp(volume.Value / 100f, 0.0f, 1.0f);
+                    try
+                    {
+                        device.AudioEndpointVolume.MasterVolumeLevelScalar = clamped;
+                        modified = true;
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Failed to set master volume scalar, refreshing endpoint");
+                        DetachCurrentDevice();
+                        device = GetOrRefreshDefaultDevice();
+                        if (device != null)
+                        {
+                            device.AudioEndpointVolume.MasterVolumeLevelScalar = clamped;
+                            modified = true;
+                        }
+                    }
+                }
+
+                if (isMuted.HasValue && device != null)
+                {
+                    try
+                    {
+                        device.AudioEndpointVolume.Mute = isMuted.Value;
+                        modified = true;
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Failed to set master mute, refreshing endpoint");
+                        DetachCurrentDevice();
+                        device = GetOrRefreshDefaultDevice();
+                        if (device != null)
+                        {
+                            device.AudioEndpointVolume.Mute = isMuted.Value;
+                            modified = true;
+                        }
+                    }
+                }
+
+                if (modified)
+                {
+                    VolumeChanged?.Invoke(GetVolumeState());
+                }
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Failed to set master volume to {Volume}", volume);
+                _logger.LogError(ex, "Failed to set master audio state (Vol: {Volume}, Mute: {Mute})", volume, isMuted);
             }
         }
     }
 
-    public void SetMasterMute(bool isMuted)
-    {
-        lock (_lock)
-        {
-            try
-            {
-                if (_defaultPlaybackDevice == null) return;
-                _defaultPlaybackDevice.AudioEndpointVolume.Mute = isMuted;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Failed to set master mute to {Mute}", isMuted);
-            }
-        }
-    }
+    public void SetMasterVolume(float volume) => SetMaster(volume, null);
+
+    public void SetMasterMute(bool isMuted) => SetMaster(null, isMuted);
 
     private static bool MatchesSession(NAudio.CoreAudioApi.AudioSessionControl session, string targetId)
     {
@@ -209,23 +306,30 @@ public class WindowsAudioManager : IAudioManager
         return false;
     }
 
-    public void SetSessionVolume(string sessionId, float volume)
+    public void SetSession(string sessionId, float? volume, bool? isMuted)
     {
         lock (_lock)
         {
             try
             {
-                if (_defaultPlaybackDevice?.AudioSessionManager == null) return;
-                var clamped = Math.Clamp(volume / 100f, 0.0f, 1.0f);
+                var device = GetOrRefreshDefaultDevice();
+                if (device?.AudioSessionManager == null) return;
 
-                var sessions = _defaultPlaybackDevice.AudioSessionManager.Sessions;
+                var sessions = device.AudioSessionManager.Sessions;
                 bool found = false;
                 for (int i = 0; i < sessions.Count; i++)
                 {
                     var s = sessions[i];
                     if (MatchesSession(s, sessionId))
                     {
-                        s.SimpleAudioVolume.Volume = clamped;
+                        if (volume.HasValue)
+                        {
+                            s.SimpleAudioVolume.Volume = Math.Clamp(volume.Value / 100f, 0.0f, 1.0f);
+                        }
+                        if (isMuted.HasValue)
+                        {
+                            s.SimpleAudioVolume.Mute = isMuted.Value;
+                        }
                         found = true;
                         break;
                     }
@@ -238,59 +342,20 @@ public class WindowsAudioManager : IAudioManager
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Failed to set session volume for {SessionId}", sessionId);
+                _logger.LogError(ex, "Failed to set session audio state for {SessionId}", sessionId);
             }
         }
     }
 
-    public void SetSessionMute(string sessionId, bool isMuted)
-    {
-        lock (_lock)
-        {
-            try
-            {
-                if (_defaultPlaybackDevice?.AudioSessionManager == null) return;
+    public void SetSessionVolume(string sessionId, float volume) => SetSession(sessionId, volume, null);
 
-                var sessions = _defaultPlaybackDevice.AudioSessionManager.Sessions;
-                bool found = false;
-                for (int i = 0; i < sessions.Count; i++)
-                {
-                    var s = sessions[i];
-                    if (MatchesSession(s, sessionId))
-                    {
-                        s.SimpleAudioVolume.Mute = isMuted;
-                        found = true;
-                        break;
-                    }
-                }
-
-                if (found)
-                {
-                    VolumeChanged?.Invoke(GetVolumeState());
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Failed to set session mute for {SessionId}", sessionId);
-            }
-        }
-    }
+    public void SetSessionMute(string sessionId, bool isMuted) => SetSession(sessionId, null, isMuted);
 
     public void Dispose()
     {
         lock (_lock)
         {
-            if (_defaultPlaybackDevice != null && _volumeNotificationDelegate != null)
-            {
-                try
-                {
-                    _defaultPlaybackDevice.AudioEndpointVolume.OnVolumeNotification -= _volumeNotificationDelegate;
-                }
-                catch
-                {
-                    // Ignore
-                }
-            }
+            DetachCurrentDevice();
             _deviceEnumerator.Dispose();
         }
     }

@@ -32,17 +32,7 @@ public class GdiScreenCaptureEngine : IScreenCaptureEngine
     [DllImport("user32.dll", SetLastError = true)]
     private static extern bool GetCursorInfo(out CURSORINFO pci);
 
-    [DllImport("user32.dll", SetLastError = true)]
-    private static extern IntPtr OpenInputDesktop(uint dwFlags, bool fInherit, uint dwDesiredAccess);
-
-    [DllImport("user32.dll", SetLastError = true)]
-    private static extern bool SetThreadDesktop(IntPtr hDesktop);
-
-    [DllImport("user32.dll", SetLastError = true)]
-    private static extern bool CloseDesktop(IntPtr hDesktop);
-
     private const int CURSOR_SHOWING = 0x00000001;
-    private const uint DESKTOP_ALL_ACCESS = 0x01FF;
     #endregion
 
     public GdiScreenCaptureEngine(ILogger<GdiScreenCaptureEngine> logger)
@@ -79,12 +69,6 @@ public class GdiScreenCaptureEngine : IScreenCaptureEngine
     public CapturedFrame? CaptureFrame(int monitorIndex, float scale, int jpegQuality, uint sequenceNumber)
     {
         var sw = Stopwatch.StartNew();
-
-        IntPtr hInputDesk = OpenInputDesktop(0, false, DESKTOP_ALL_ACCESS);
-        if (hInputDesk != IntPtr.Zero)
-        {
-            SetThreadDesktop(hInputDesk);
-        }
 
         try
         {
@@ -190,13 +174,6 @@ public class GdiScreenCaptureEngine : IScreenCaptureEngine
         {
             _logger.LogError(ex, "Screen capture failed for monitor {MonitorIndex}", monitorIndex);
             return null;
-        }
-        finally
-        {
-            if (hInputDesk != IntPtr.Zero)
-            {
-                CloseDesktop(hInputDesk);
-            }
         }
     }
 

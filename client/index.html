@@ -23,10 +23,19 @@
     <script>
       // Register Service Worker for PWA
       if ('serviceWorker' in navigator) {
+        let hasServiceWorkerController = Boolean(navigator.serviceWorker.controller);
+        navigator.serviceWorker.addEventListener('controllerchange', () => {
+          if (hasServiceWorkerController) {
+            window.location.reload();
+            return;
+          }
+          hasServiceWorkerController = true;
+        });
+
         window.addEventListener('load', () => {
-          navigator.serviceWorker.register('/sw.js').catch(err => {
-            console.debug('ServiceWorker registration omitted:', err);
-          });
+          navigator.serviceWorker.register('/sw.js')
+            .then(registration => registration.update())
+            .catch(err => console.debug('ServiceWorker registration omitted:', err));
         });
       }
     </script>

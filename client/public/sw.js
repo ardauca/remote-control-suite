@@ -1,4 +1,4 @@
-const CACHE_NAME = 'remote-suite-v4';
+const CACHE_NAME = 'remote-suite-v8';
 const ASSETS_TO_CACHE = [
   '/',
   '/index.html',
