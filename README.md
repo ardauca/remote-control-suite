@@ -1,9 +1,9 @@
 # iPhone → Windows Remote Control Suite
 
-[![.NET 9](https://img.shields.io/badge/.NET-9.0-512bd4?style=flat-square&logo=dotnet)](https://dotnet.microsoft.com/)
+[![.NET 10](https://img.shields.io/badge/.NET-10.0-512bd4?style=flat-square&logo=dotnet)](https://dotnet.microsoft.com/)
 [![React 19](https://img.shields.io/badge/React-19.0-61dafb?style=flat-square&logo=react)](https://react.dev/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.7-3178c6?style=flat-square&logo=typescript)](https://www.typescriptlang.org/)
-[![Vite](https://img.shields.io/badge/Vite-6.2-646cff?style=flat-square&logo=vite)](https://vitejs.dev/)
+[![Vite](https://img.shields.io/badge/Vite-6.4-646cff?style=flat-square&logo=vite)](https://vitejs.dev/)
 [![Tailwind CSS](https://img.shields.io/badge/Tailwind_CSS-3.4-38bdf8?style=flat-square&logo=tailwindcss)](https://tailwindcss.com/)
 [![Platform](https://img.shields.io/badge/Platform-Windows%2010%20%2F%2011%20%7C%20iOS%20Safari-0078d4?style=flat-square)](https://github.com/ardauca/remote-control-suite)
 [![Security](https://img.shields.io/badge/Security-PIN%20Pairing%20%2B%20Token%20Auth-emerald?style=flat-square)](docs/PROTOCOL.md)
@@ -138,10 +138,14 @@ dotnet build
 dotnet run
 ```
 
-### Publish Self-Contained Binary
+### Publish Self-Contained Windows Package
 ```bash
-dotnet publish server/RemoteAgent/RemoteAgent.csproj -c Release -o publish
+powershell -ExecutionPolicy Bypass -File scripts/publish-windows.ps1
 ```
+
+The script builds the iPhone web app, publishes a self-contained Windows x64 host, and creates `artifacts/RemoteSuite-win-x64.zip`. Users do not need to install the .NET runtime. For the end-user setup steps, see [Windows installation guide](docs/INSTALL_WINDOWS.md).
+
+To publish a downloadable GitHub Release, push a version tag such as `v1.3.0`; the Windows release workflow builds and attaches the ZIP automatically. You can also run that workflow manually to produce a downloadable build artifact without publishing a release.
 
 ### Automated Test Suite
 ```bash

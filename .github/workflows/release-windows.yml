@@ -1,0 +1,65 @@
+name: Windows release package
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+
+      - name: Setup .NET 10 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Build iPhone web app
+        working-directory: client
+        run: |
+          npm ci
+          npm run build
+
+      - name: Publish self-contained Windows x64 host
+        run: >-
+          dotnet publish server/RemoteAgent/RemoteAgent.csproj
+          -c Release
+          -r win-x64
+          --self-contained true
+          -p:UseAppHost=true
+          -o artifacts/RemoteSuite-win-x64
+
+      - name: Include installation guide and create ZIP
+        shell: pwsh
+        run: |
+          Copy-Item docs/INSTALL_WINDOWS.md artifacts/RemoteSuite-win-x64/INSTALL.md
+          Compress-Archive -Path artifacts/RemoteSuite-win-x64/* -DestinationPath artifacts/RemoteSuite-win-x64.zip -CompressionLevel Optimal
+
+      - name: Upload downloadable package
+        uses: actions/upload-artifact@v4
+        with:
+          name: RemoteSuite-win-x64
+          path: artifacts/RemoteSuite-win-x64.zip
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish GitHub Release for version tags
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${{ github.ref_name }}" artifacts/RemoteSuite-win-x64.zip --generate-notes

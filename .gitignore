@@ -4,6 +4,7 @@
 [Bb]in/
 [Oo]bj/
 publish/
+artifacts/
 *.user
 *.userosscache
 *.sln.docstates

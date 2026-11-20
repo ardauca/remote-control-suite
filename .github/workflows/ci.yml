@@ -21,10 +21,10 @@ jobs:
           cache: 'npm'
           cache-dependency-path: 'client/package-lock.json'
 
-      - name: Setup .NET 9.0 SDK
+      - name: Setup .NET 10.0 SDK
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: 9.0.x
+          dotnet-version: 10.0.x
 
       # 1. Build Client PWA
       - name: Install Client Dependencies
@@ -37,7 +37,7 @@ jobs:
           cd client
           npm run build
 
-      # 2. Build Server Agent (.NET 9 Windows Forms & Kestrel)
+      # 2. Build Server Agent (.NET 10 Windows Forms & Kestrel)
       - name: Restore Server Dependencies
         run: dotnet restore server/RemoteAgent/RemoteAgent.csproj
 
