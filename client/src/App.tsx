@@ -25,7 +25,8 @@ export const App: React.FC = () => {
   const [keyboardOpenedFromScreen, setKeyboardOpenedFromScreen] = useState(false);
   const [keyboardDraft, setKeyboardDraft] = useState('');
   const [keyboardDraftUnsent, setKeyboardDraftUnsent] = useState(false);
-  const { status, hostHealth, isAuthenticated, latency } = useConnectionStore();
+  const { status, hostHealth, isAuthenticated, authPending, authToken, authError, latency } = useConnectionStore();
+  const isPcReady = status === 'connected' && hostHealth === 'responsive' && isAuthenticated;
 
   const openKeyboardForTyping = useCallback(() => {
     setAutoFocusKeyboard(true);
@@ -53,12 +54,12 @@ export const App: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    if (status === 'connected' && hostHealth === 'responsive' && !isAuthenticated) {
+    if (status === 'connected' && hostHealth === 'responsive' && !isAuthenticated && !authPending && (!authToken || Boolean(authError))) {
       setIsPairingOpen(true);
-    } else if (isAuthenticated) {
+    } else if (isAuthenticated || status !== 'connected' || hostHealth !== 'responsive' || authPending) {
       setIsPairingOpen(false);
     }
-  }, [status, hostHealth, isAuthenticated]);
+  }, [status, hostHealth, isAuthenticated, authPending, authToken, authError]);
 
   // Screen Wake Lock: Keep phone screen awake while connected to prevent auto-lock during remote control
   useEffect(() => {
@@ -104,6 +105,12 @@ export const App: React.FC = () => {
       releaseWakeLock();
     };
   }, [status]);
+
+  useEffect(() => {
+    if (keyboardDraft && hostHealth !== 'responsive') {
+      setKeyboardDraftUnsent(true);
+    }
+  }, [hostHealth, keyboardDraft]);
 
   return (
     <div className="flex flex-col h-full w-full bg-dark-900 text-slate-100 select-none overflow-hidden">
@@ -215,12 +222,12 @@ export const App: React.FC = () => {
 
             <div className="bg-dark-800/50 rounded-2xl p-4 border border-slate-800 text-xs space-y-3">
               <h3 className="font-semibold text-slate-200 flex items-center gap-1.5">
-                {isAuthenticated
+                {isPcReady
                   ? <CheckCircle className="w-4 h-4 text-emerald-400" />
                   : <ShieldAlert className="w-4 h-4 text-amber-400" />}
-                {isAuthenticated ? 'Your PC is ready' : 'Get started'}
+                {isPcReady ? 'Your PC is ready' : authPending ? 'Verifying this iPhone' : 'Get started'}
               </h3>
-              {isAuthenticated ? (
+              {isPcReady ? (
                 <>
                   <p className="text-slate-400">Choose what you want to control.</p>
                   <div className="grid grid-cols-2 gap-2">
@@ -242,6 +249,8 @@ export const App: React.FC = () => {
                     ))}
                   </div>
                 </>
+              ) : authPending ? (
+                <p className="text-slate-400">Checking the saved authorization with Windows.</p>
               ) : (
                 <ol className="space-y-2 text-slate-400">
                   <li><span className="mr-2 font-semibold text-brand-400">1.</span>Connect to your Windows PC using its local address.</li>

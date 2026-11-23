@@ -60,8 +60,10 @@ export const KeyboardControlBar: React.FC<KeyboardControlBarProps> = ({
 
   const inputRef = useRef<HTMLInputElement>(null);
   const isComposingRef = useRef(false);
+  const isTextUnsentRef = useRef(isTextUnsent);
   const pendingTextRef = useRef('');
   const sendTextTimerRef = useRef<number | null>(null);
+  isTextUnsentRef.current = isTextUnsent;
 
   useEffect(() => {
     if (autoFocusInput) {
@@ -157,7 +159,7 @@ export const KeyboardControlBar: React.FC<KeyboardControlBarProps> = ({
     }
 
     const text = pendingTextRef.current;
-    if (!text) return;
+    if (!text || isTextUnsent) return;
 
     const sent = wsClient.send('command', 'keyboard.text', { text });
     if (sent) {
@@ -189,6 +191,10 @@ export const KeyboardControlBar: React.FC<KeyboardControlBarProps> = ({
 
   const handleCompositionEnd = (e: React.CompositionEvent<HTMLInputElement>) => {
     isComposingRef.current = false;
+    if (isTextUnsent) {
+      pendingTextRef.current = '';
+      return;
+    }
     const val = e.currentTarget.value || `${pendingTextRef.current}${e.data}`;
     if (val) scheduleTextFlush(val, 80);
   };
@@ -196,11 +202,19 @@ export const KeyboardControlBar: React.FC<KeyboardControlBarProps> = ({
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = e.target.value;
     onTextInputChange(val);
-    onTextUnsentChange(false);
+
+    if (isTextUnsent) {
+      pendingTextRef.current = '';
+      if (!val) onTextUnsentChange(false);
+      if (sendTextTimerRef.current !== null) {
+        window.clearTimeout(sendTextTimerRef.current);
+        sendTextTimerRef.current = null;
+      }
+      return;
+    }
 
     if (!isComposingRef.current && !val) {
       pendingTextRef.current = '';
-      onTextUnsentChange(false);
       if (sendTextTimerRef.current !== null) {
         window.clearTimeout(sendTextTimerRef.current);
         sendTextTimerRef.current = null;
@@ -232,6 +246,10 @@ export const KeyboardControlBar: React.FC<KeyboardControlBarProps> = ({
       sendSpecialKey('BACKSPACE');
     } else if (e.key === 'Enter') {
       e.preventDefault();
+      if (isTextUnsent) {
+        retryUnsentText();
+        return;
+      }
       flushPendingText();
       sendSpecialKey('ENTER');
     } else if (e.key === 'Tab') {
@@ -255,7 +273,7 @@ export const KeyboardControlBar: React.FC<KeyboardControlBarProps> = ({
 
   useEffect(() => () => {
     if (sendTextTimerRef.current !== null) window.clearTimeout(sendTextTimerRef.current);
-    const pending = pendingTextRef.current;
+    const pending = isTextUnsentRef.current ? '' : pendingTextRef.current;
     if (pending) {
       const sent = wsClient.send('command', 'keyboard.text', { text: pending });
       if (sent) {
@@ -343,6 +361,10 @@ export const KeyboardControlBar: React.FC<KeyboardControlBarProps> = ({
           type="button"
           onClick={() => {
             if ('vibrate' in navigator) navigator.vibrate(8);
+            if (isTextUnsent) {
+              retryUnsentText();
+              return;
+            }
             flushPendingText();
             sendSpecialKey('ENTER');
           }}

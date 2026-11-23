@@ -65,6 +65,8 @@ class WebSocketClient {
 
   private lastPongTime = Date.now();
   private lastDataTime = Date.now();
+  private latestHealthProbeTime = 0;
+  private pendingSafetyReleases = new Map<string, { action: string; payload: unknown }>();
 
   constructor() {
     // Handle iOS Safari visibility change (instant reconnect on app resume)
@@ -75,10 +77,8 @@ class WebSocketClient {
             useConnectionStore.getState().addLog('info', 'App resumed into foreground. Reconnecting...');
             this.reconnectImmediate();
           } else if (this.isConnected()) {
-            // Verify the resumed socket before allowing controls to look ready.
-            useConnectionStore.getState().setHostHealth('checking');
-            this.lastPongTime = Date.now();
-            this.send('heartbeat', 'system.ping', { clientTime: Date.now() });
+            // A pong from before suspension must not make controls look ready.
+            this.requestHealthCheck();
           }
         }
       });
@@ -124,11 +124,21 @@ class WebSocketClient {
     useConnectionStore.getState().setServerInfo(null);
     useConnectionStore.getState().setLatency(0);
     useConnectionStore.getState().setAuthenticated(false);
+    useConnectionStore.getState().setAuthPending(false);
     useConnectionStore.getState().addLog('info', 'Disconnected by user.');
   }
 
   public isConnected(): boolean {
     return this.socket !== null && this.socket.readyState === WebSocket.OPEN;
+  }
+
+  public requestHealthCheck(): boolean {
+    const clientTime = Math.max(Date.now(), this.latestHealthProbeTime + 1);
+    const store = useConnectionStore.getState();
+    this.latestHealthProbeTime = clientTime;
+    this.lastPongTime = clientTime;
+    store.setHostHealth('checking');
+    return this.send('heartbeat', 'system.ping', { clientTime });
   }
 
   public getPointerDiagnostics() {
@@ -149,7 +159,10 @@ class WebSocketClient {
       };
     }
 
+    const isSafetyRelease = type === 'command' && this.isSafetyRelease(action);
+
     if (!this.isConnected()) {
+      if (isSafetyRelease) this.queueSafetyRelease(action, payload);
       if (isPointerMove) this.pointerDiagnostics.blocked += 1;
       useConnectionStore.getState().addLog('warn', `Cannot send ${action}: Not connected`);
       return false;
@@ -157,6 +170,7 @@ class WebSocketClient {
 
     const { hostHealth } = useConnectionStore.getState();
     if (type === 'command' && !action.startsWith('auth.') && hostHealth !== 'responsive') {
+      if (isSafetyRelease) this.queueSafetyRelease(action, payload);
       if (isPointerMove) this.pointerDiagnostics.blocked += 1;
       return false;
     }
@@ -179,8 +193,28 @@ class WebSocketClient {
       return true;
     } catch (err) {
       if (isPointerMove) this.pointerDiagnostics.errors += 1;
+      if (isSafetyRelease) this.queueSafetyRelease(action, payload);
       useConnectionStore.getState().addLog('error', `Send error for ${action}: ${err}`);
       return false;
+    }
+  }
+
+  private isSafetyRelease(action: string): boolean {
+    return action === 'mouse.up' || action === 'keyboard.keyUp' || action === 'keyboard.releaseAll';
+  }
+
+  private queueSafetyRelease(action: string, payload: unknown): void {
+    const key = `${action}:${JSON.stringify(payload)}`;
+    this.pendingSafetyReleases.set(key, { action, payload });
+  }
+
+  private flushSafetyReleases(): void {
+    const store = useConnectionStore.getState();
+    if (!this.isConnected() || store.hostHealth !== 'responsive' || !store.isAuthenticated) return;
+
+    for (const [key, release] of this.pendingSafetyReleases) {
+      if (!this.send('command', release.action, release.payload)) return;
+      this.pendingSafetyReleases.delete(key);
     }
   }
 
@@ -215,6 +249,9 @@ class WebSocketClient {
 
   private handleOpen() {
     const store = useConnectionStore.getState();
+    store.setAuthenticated(false);
+    store.setAuthError(null);
+    store.setAuthPending(Boolean(store.authToken));
     store.setStatus('connected');
     store.setHostHealth('checking');
     store.resetReconnectAttempts();
@@ -222,6 +259,7 @@ class WebSocketClient {
 
     this.lastPongTime = Date.now();
     this.lastDataTime = this.lastPongTime;
+    this.latestHealthProbeTime = this.lastPongTime;
     this.startHeartbeat();
   }
 
@@ -263,10 +301,12 @@ class WebSocketClient {
 
         // If we have a saved auth token, authenticate automatically
         if (store.authToken) {
+          store.setAuthPending(true);
           store.addLog('info', 'Authenticating with saved session token...');
           this.login(store.authToken);
         } else {
           store.setAuthenticated(false);
+          store.setAuthPending(false);
         }
       } else if (envelope.action === 'auth.result') {
         const res = envelope.payload as AuthResultPayload;
@@ -275,10 +315,13 @@ class WebSocketClient {
             store.setAuthToken(res.token);
           }
           store.setAuthenticated(true, res.capabilities, res.deviceId, res.deviceName);
+          store.setAuthPending(false);
+          this.flushSafetyReleases();
           store.addLog('success', res.message || 'Device authenticated successfully!');
         } else {
           store.setAuthenticated(false);
           store.setAuthError(res.message);
+          store.setAuthPending(false);
           store.addLog('warn', res.message || 'Authentication failed. Please pair device.');
         }
       } else if (envelope.action === 'system.error') {
@@ -286,6 +329,7 @@ class WebSocketClient {
         if (err.code === 'UNAUTHORIZED') {
           store.setAuthenticated(false);
           store.setAuthError(err.message || 'Authentication required');
+          store.setAuthPending(false);
           store.addLog('error', `Security: ${err.message}`);
         } else if (err.code === 'RATE_LIMITED') {
           store.addLog('warn', `Rate limited: ${err.message}`);
@@ -295,11 +339,14 @@ class WebSocketClient {
       } else if (envelope.action === 'system.pong') {
         const pong = envelope.payload as PongPayload;
         const now = Date.now();
-        this.lastPongTime = now;
-        store.setHostHealth('responsive');
-        const rtt = Math.max(0, now - pong.clientTime);
-        store.setLatency(rtt);
-        store.setLastHeartbeat(now);
+        if (typeof pong.clientTime === 'number' && pong.clientTime >= this.latestHealthProbeTime) {
+          this.lastPongTime = now;
+          store.setHostHealth('responsive');
+          const rtt = Math.max(0, now - pong.clientTime);
+          store.setLatency(rtt);
+          store.setLastHeartbeat(now);
+          this.flushSafetyReleases();
+        }
       } else if (envelope.action === 'volume.state') {
         const vol = envelope.payload as VolumeStatePayload;
         useMediaStore.getState().setVolumeState(vol);
@@ -329,6 +376,9 @@ class WebSocketClient {
     const store = useConnectionStore.getState();
     store.setHostHealth('unknown');
     store.setLatency(0);
+    store.setAuthenticated(false);
+    store.setAuthPending(false);
+    store.setAuthError(null);
 
     if (this.isManuallyClosed) {
       store.setStatus('disconnected');

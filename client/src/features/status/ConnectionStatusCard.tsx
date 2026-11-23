@@ -26,6 +26,7 @@ export const ConnectionStatusCard: React.FC<ConnectionStatusCardProps> = ({ onPa
     reconnectAttempts, 
     logs, 
     isAuthenticated,
+    authPending,
     deviceName,
     setServerUrl
   } = useConnectionStore();
@@ -189,8 +190,7 @@ export const ConnectionStatusCard: React.FC<ConnectionStatusCardProps> = ({ onPa
                 type="button"
                 onClick={() => {
                   if ('vibrate' in navigator) navigator.vibrate(5);
-                  useConnectionStore.getState().setHostHealth('checking');
-                  wsClient.send('heartbeat', 'system.ping', { clientTime: Date.now() });
+                  wsClient.requestHealthCheck();
                 }}
                 className="mt-2 text-[10px] text-brand-400 hover:text-brand-300 flex items-center gap-1 font-medium transition-colors"
               >
@@ -253,7 +253,8 @@ export const ConnectionStatusCard: React.FC<ConnectionStatusCardProps> = ({ onPa
             <span className="text-xs text-slate-300">
               {isAuthenticated
                 ? `Authorized (${deviceName || 'Paired Device'})`
-                : status === 'connected' && hostHealth === 'responsive' ? 'Pair this device to enable controls' : 'Pairing is available after the PC responds'}
+                : authPending ? 'Verifying saved authorization'
+                  : status === 'connected' && hostHealth === 'responsive' ? 'Pair this device to enable controls' : 'Pairing is available after the PC responds'}
             </span>
           </div>
           {isAuthenticated ? (
@@ -266,7 +267,7 @@ export const ConnectionStatusCard: React.FC<ConnectionStatusCardProps> = ({ onPa
             >
               Unpair
             </button>
-          ) : status === 'connected' && hostHealth === 'responsive' ? (
+          ) : status === 'connected' && hostHealth === 'responsive' && !authPending ? (
             <button
               type="button"
               onClick={onPair}

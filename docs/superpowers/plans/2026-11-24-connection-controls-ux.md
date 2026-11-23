@@ -89,26 +89,30 @@
 
 **Files:**
 - Modify: `client/src/App.tsx`
+- Modify: `client/src/stores/connectionStore.ts`
 - Modify: `client/src/protocol/wsClient.ts`
 - Modify: `client/src/features/keyboard/KeyboardControlBar.tsx`
 
 **Interfaces:**
 - Change `wsClient.send<T>(type, action, payload)` to return `true` only when `WebSocket.send` succeeds and `false` when the socket is unavailable or send throws.
 - While `hostHealth !== 'responsive'`, return `false` without sending user control commands (`type === 'command'` except `auth.*`). Continue to allow heartbeat and auth handshake commands.
+- Reset live authentication on every new socket while preserving the saved token; expose `authPending` until the server returns `auth.result`.
+- Correlate foreground health checks with the echoed ping `clientTime`; do not accept pre-resume pongs as proof of current responsiveness.
+- Queue and deduplicate idempotent `mouse.up`, `keyboard.keyUp`, and `keyboard.releaseAll` safety commands while disconnected/stale; flush after both authentication and a fresh pong.
 - Keep keyboard draft state in `App.tsx`, and pass it to `KeyboardControlBar` as controlled `textInput` and `onTextInputChange` props so it survives the access gate unmounting the keyboard during reconnect.
-- Add an explicit retry action for a retained unsent draft; retry sends the text only and does not synthesize Enter.
+- Add an explicit retry action for a retained unsent draft; retry sends the text only and does not synthesize Enter. Editing or IME composition of an unsent draft must not automatically send it again.
 
 - [x] **Step 1: Return local-send success from `wsClient.send`**
 
-  Return `false` on unavailable socket, stale host, or send error and `true` after the local WebSocket send call succeeds. While health is not responsive, block non-auth command actions but continue allowing heartbeat and `auth.*`. This is local transport success only, not a server delivery acknowledgment.
+  Return `false` on unavailable socket, stale host, or send error and `true` after the local WebSocket send call succeeds. While health is not responsive, block non-auth command actions but queue only idempotent safety releases; continue allowing heartbeat and `auth.*`. Flush queued releases only after both a fresh pong and live authentication. This is local transport success only, not a server delivery acknowledgment.
 
 - [x] **Step 2: Lift keyboard draft state to `App.tsx`**
 
-  Make the keyboard input controlled by the App so the text value survives temporary feature-gate unmounts. Keep current typing, dictation, and IME composition behavior when responsive.
+  Make the keyboard input controlled by the App so the text value survives temporary feature-gate unmounts. Reset live auth on each opened socket, preserve the stored token, and distinguish pending token authentication from pairing.
 
 - [x] **Step 3: Retain and expose unsent text**
 
-  When a pending text flush returns `false`, keep the draft visible and mark it unsent. After responsiveness returns, allow an explicit retry that sends only the draft. Clear the draft and unsent state only after `send` returns `true`.
+  When a pending text flush returns `false` or host responsiveness is lost during a nonempty draft, keep the draft visible and mark it unsent. Suppress timer, blur, composition, and Enter-triggered automatic text sends while unsent. After responsiveness returns, allow an explicit retry that sends only the draft. Clear the draft and unsent state only after `send` returns `true`.
 
 - [x] **Step 4: Build the client and server**
 
