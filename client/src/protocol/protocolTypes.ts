@@ -197,3 +197,5 @@ export interface DecodedBinaryFrame {
 }
 
 export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'reconnecting';
+
+export type HostHealth = 'unknown' | 'checking' | 'responsive' | 'stale';

@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { ConnectionStatus, ServerHelloPayload } from '../protocol/protocolTypes';
+import { ConnectionStatus, HostHealth, ServerHelloPayload } from '../protocol/protocolTypes';
 
 export interface LogEntry {
   id: string;
@@ -10,6 +10,7 @@ export interface LogEntry {
 
 interface ConnectionState {
   status: ConnectionStatus;
+  hostHealth: HostHealth;
   serverUrl: string;
   latency: number | null;
   serverInfo: ServerHelloPayload | null;
@@ -20,6 +21,7 @@ interface ConnectionState {
   // Authentication & Pairing State
   authToken: string;
   isAuthenticated: boolean;
+  authPending: boolean;
   deviceId: string | null;
   deviceName: string | null;
   capabilities: string[];
@@ -27,6 +29,7 @@ interface ConnectionState {
 
   // Actions
   setStatus: (status: ConnectionStatus) => void;
+  setHostHealth: (health: HostHealth) => void;
   setServerUrl: (url: string) => void;
   setLatency: (latency: number) => void;
   setServerInfo: (info: ServerHelloPayload | null) => void;
@@ -38,6 +41,7 @@ interface ConnectionState {
 
   setAuthToken: (token: string | null) => void;
   setAuthenticated: (isAuth: boolean, caps?: string[], deviceId?: string, deviceName?: string) => void;
+  setAuthPending: (pending: boolean) => void;
   setAuthError: (err: string | null) => void;
   clearAuth: () => void;
 }
@@ -52,6 +56,7 @@ const getDefaultServerUrl = (): string => {
 
 export const useConnectionStore = create<ConnectionState>((set) => ({
   status: 'disconnected',
+  hostHealth: 'unknown',
   serverUrl: localStorage.getItem('remote_suite_ws_url') || getDefaultServerUrl(),
   latency: null,
   serverInfo: null,
@@ -61,12 +66,14 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
 
   authToken: localStorage.getItem('remote_suite_auth_token') || '',
   isAuthenticated: false,
+  authPending: false,
   deviceId: null,
   deviceName: null,
   capabilities: [],
   authError: null,
 
   setStatus: (status) => set({ status }),
+  setHostHealth: (hostHealth) => set({ hostHealth }),
   setServerUrl: (url) => {
     localStorage.setItem('remote_suite_ws_url', url);
     set({ serverUrl: url });
@@ -95,7 +102,7 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
       set({ authToken: token });
     } else {
       localStorage.removeItem('remote_suite_auth_token');
-      set({ authToken: '', isAuthenticated: false, deviceId: null, capabilities: [] });
+      set({ authToken: '', isAuthenticated: false, authPending: false, deviceId: null, capabilities: [] });
     }
   },
 
@@ -109,6 +116,8 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
     }));
   },
 
+  setAuthPending: (authPending) => set({ authPending }),
+
   setAuthError: (err) => set({ authError: err }),
 
   clearAuth: () => {
@@ -116,6 +125,7 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
     set({
       authToken: '',
       isAuthenticated: false,
+      authPending: false,
       deviceId: null,
       deviceName: null,
       capabilities: [],

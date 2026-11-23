@@ -61,8 +61,12 @@ class WebSocketClient {
   private readonly MAX_RECONNECT_DELAY = 3000;
   private readonly HEARTBEAT_INTERVAL = 4000;
   private readonly WATCHDOG_TIMEOUT = 25000;
+  private readonly STALE_HOST_TIMEOUT = 12000;
 
   private lastPongTime = Date.now();
+  private lastDataTime = Date.now();
+  private latestHealthProbeTime = 0;
+  private pendingSafetyReleases = new Map<string, { action: string; payload: unknown }>();
 
   constructor() {
     // Handle iOS Safari visibility change (instant reconnect on app resume)
@@ -73,8 +77,8 @@ class WebSocketClient {
             useConnectionStore.getState().addLog('info', 'App resumed into foreground. Reconnecting...');
             this.reconnectImmediate();
           } else if (this.isConnected()) {
-            // Proactively verify connection with instant ping instead of killing working socket
-            this.send('heartbeat', 'system.ping', { clientTime: Date.now() });
+            // A pong from before suspension must not make controls look ready.
+            this.requestHealthCheck();
           }
         }
       });
@@ -116,14 +120,25 @@ class WebSocketClient {
     this.isManuallyClosed = true;
     this.cleanup();
     useConnectionStore.getState().setStatus('disconnected');
+    useConnectionStore.getState().setHostHealth('unknown');
     useConnectionStore.getState().setServerInfo(null);
     useConnectionStore.getState().setLatency(0);
     useConnectionStore.getState().setAuthenticated(false);
+    useConnectionStore.getState().setAuthPending(false);
     useConnectionStore.getState().addLog('info', 'Disconnected by user.');
   }
 
   public isConnected(): boolean {
     return this.socket !== null && this.socket.readyState === WebSocket.OPEN;
+  }
+
+  public requestHealthCheck(): boolean {
+    const clientTime = Math.max(Date.now(), this.latestHealthProbeTime + 1);
+    const store = useConnectionStore.getState();
+    this.latestHealthProbeTime = clientTime;
+    this.lastPongTime = clientTime;
+    store.setHostHealth('checking');
+    return this.send('heartbeat', 'system.ping', { clientTime });
   }
 
   public getPointerDiagnostics() {
@@ -132,7 +147,7 @@ class WebSocketClient {
 
   private fastMsgSeq = 0;
 
-  public send<T>(type: 'command' | 'event' | 'response' | 'heartbeat', action: string, payload: T) {
+  public send<T>(type: 'command' | 'event' | 'response' | 'heartbeat', action: string, payload: T): boolean {
     const isPointerMove = action === 'mouse.move';
     if (isPointerMove) {
       const move = payload as { dx?: unknown; dy?: unknown } | null;
@@ -144,10 +159,20 @@ class WebSocketClient {
       };
     }
 
+    const isSafetyRelease = type === 'command' && this.isSafetyRelease(action);
+
     if (!this.isConnected()) {
+      if (isSafetyRelease) this.queueSafetyRelease(action, payload);
       if (isPointerMove) this.pointerDiagnostics.blocked += 1;
       useConnectionStore.getState().addLog('warn', `Cannot send ${action}: Not connected`);
-      return;
+      return false;
+    }
+
+    const { hostHealth } = useConnectionStore.getState();
+    if (type === 'command' && !action.startsWith('auth.') && hostHealth !== 'responsive') {
+      if (isSafetyRelease) this.queueSafetyRelease(action, payload);
+      if (isPointerMove) this.pointerDiagnostics.blocked += 1;
+      return false;
     }
 
     const envelope: MessageEnvelope<T> = {
@@ -165,9 +190,31 @@ class WebSocketClient {
         this.pointerDiagnostics.sent += 1;
         this.pointerDiagnostics.lastSentAt = Date.now();
       }
+      return true;
     } catch (err) {
       if (isPointerMove) this.pointerDiagnostics.errors += 1;
+      if (isSafetyRelease) this.queueSafetyRelease(action, payload);
       useConnectionStore.getState().addLog('error', `Send error for ${action}: ${err}`);
+      return false;
+    }
+  }
+
+  private isSafetyRelease(action: string): boolean {
+    return action === 'mouse.up' || action === 'keyboard.keyUp' || action === 'keyboard.releaseAll';
+  }
+
+  private queueSafetyRelease(action: string, payload: unknown): void {
+    const key = `${action}:${JSON.stringify(payload)}`;
+    this.pendingSafetyReleases.set(key, { action, payload });
+  }
+
+  private flushSafetyReleases(): void {
+    const store = useConnectionStore.getState();
+    if (!this.isConnected() || store.hostHealth !== 'responsive' || !store.isAuthenticated) return;
+
+    for (const [key, release] of this.pendingSafetyReleases) {
+      if (!this.send('command', release.action, release.payload)) return;
+      this.pendingSafetyReleases.delete(key);
     }
   }
 
@@ -202,17 +249,23 @@ class WebSocketClient {
 
   private handleOpen() {
     const store = useConnectionStore.getState();
+    store.setAuthenticated(false);
+    store.setAuthError(null);
+    store.setAuthPending(Boolean(store.authToken));
     store.setStatus('connected');
+    store.setHostHealth('checking');
     store.resetReconnectAttempts();
     store.addLog('success', 'Connected to Windows Agent!');
 
     this.lastPongTime = Date.now();
+    this.lastDataTime = this.lastPongTime;
+    this.latestHealthProbeTime = this.lastPongTime;
     this.startHeartbeat();
   }
 
   private handleMessage(event: MessageEvent) {
     try {
-      this.lastPongTime = Date.now(); // Any frame or message proves socket and server are alive!
+      this.lastDataTime = Date.now();
 
       // Check for binary messages (e.g. Screen Mirroring JPEG frames)
       if (typeof event.data !== 'string') {
@@ -248,10 +301,12 @@ class WebSocketClient {
 
         // If we have a saved auth token, authenticate automatically
         if (store.authToken) {
+          store.setAuthPending(true);
           store.addLog('info', 'Authenticating with saved session token...');
           this.login(store.authToken);
         } else {
           store.setAuthenticated(false);
+          store.setAuthPending(false);
         }
       } else if (envelope.action === 'auth.result') {
         const res = envelope.payload as AuthResultPayload;
@@ -260,10 +315,13 @@ class WebSocketClient {
             store.setAuthToken(res.token);
           }
           store.setAuthenticated(true, res.capabilities, res.deviceId, res.deviceName);
+          store.setAuthPending(false);
+          this.flushSafetyReleases();
           store.addLog('success', res.message || 'Device authenticated successfully!');
         } else {
           store.setAuthenticated(false);
           store.setAuthError(res.message);
+          store.setAuthPending(false);
           store.addLog('warn', res.message || 'Authentication failed. Please pair device.');
         }
       } else if (envelope.action === 'system.error') {
@@ -271,6 +329,7 @@ class WebSocketClient {
         if (err.code === 'UNAUTHORIZED') {
           store.setAuthenticated(false);
           store.setAuthError(err.message || 'Authentication required');
+          store.setAuthPending(false);
           store.addLog('error', `Security: ${err.message}`);
         } else if (err.code === 'RATE_LIMITED') {
           store.addLog('warn', `Rate limited: ${err.message}`);
@@ -280,10 +339,14 @@ class WebSocketClient {
       } else if (envelope.action === 'system.pong') {
         const pong = envelope.payload as PongPayload;
         const now = Date.now();
-        this.lastPongTime = now;
-        const rtt = Math.max(0, now - pong.clientTime);
-        store.setLatency(rtt);
-        store.setLastHeartbeat(now);
+        if (typeof pong.clientTime === 'number' && pong.clientTime >= this.latestHealthProbeTime) {
+          this.lastPongTime = now;
+          store.setHostHealth('responsive');
+          const rtt = Math.max(0, now - pong.clientTime);
+          store.setLatency(rtt);
+          store.setLastHeartbeat(now);
+          this.flushSafetyReleases();
+        }
       } else if (envelope.action === 'volume.state') {
         const vol = envelope.payload as VolumeStatePayload;
         useMediaStore.getState().setVolumeState(vol);
@@ -311,7 +374,11 @@ class WebSocketClient {
   private handleClose(event: CloseEvent) {
     this.stopHeartbeat();
     const store = useConnectionStore.getState();
+    store.setHostHealth('unknown');
     store.setLatency(0);
+    store.setAuthenticated(false);
+    store.setAuthPending(false);
+    store.setAuthError(null);
 
     if (this.isManuallyClosed) {
       store.setStatus('disconnected');
@@ -332,11 +399,16 @@ class WebSocketClient {
     this.stopHeartbeat();
     this.heartbeatTimer = window.setInterval(() => {
       if (this.isConnected()) {
-        const timeSinceLastData = Date.now() - this.lastPongTime;
+        const now = Date.now();
+        const timeSinceLastData = now - this.lastDataTime;
+        const timeSinceLastPong = now - this.lastPongTime;
         if (timeSinceLastData > this.WATCHDOG_TIMEOUT) {
           useConnectionStore.getState().addLog('warn', `Heartbeat timeout: No data for ${(timeSinceLastData / 1000).toFixed(0)}s. Reconnecting...`);
           this.reconnectImmediate();
           return;
+        }
+        if (timeSinceLastPong > this.STALE_HOST_TIMEOUT) {
+          useConnectionStore.getState().setHostHealth('stale');
         }
         this.send('heartbeat', 'system.ping', { clientTime: Date.now() });
       }
