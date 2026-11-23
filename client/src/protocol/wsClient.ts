@@ -61,8 +61,10 @@ class WebSocketClient {
   private readonly MAX_RECONNECT_DELAY = 3000;
   private readonly HEARTBEAT_INTERVAL = 4000;
   private readonly WATCHDOG_TIMEOUT = 25000;
+  private readonly STALE_HOST_TIMEOUT = 12000;
 
   private lastPongTime = Date.now();
+  private lastDataTime = Date.now();
 
   constructor() {
     // Handle iOS Safari visibility change (instant reconnect on app resume)
@@ -73,7 +75,9 @@ class WebSocketClient {
             useConnectionStore.getState().addLog('info', 'App resumed into foreground. Reconnecting...');
             this.reconnectImmediate();
           } else if (this.isConnected()) {
-            // Proactively verify connection with instant ping instead of killing working socket
+            // Verify the resumed socket before allowing controls to look ready.
+            useConnectionStore.getState().setHostHealth('checking');
+            this.lastPongTime = Date.now();
             this.send('heartbeat', 'system.ping', { clientTime: Date.now() });
           }
         }
@@ -116,6 +120,7 @@ class WebSocketClient {
     this.isManuallyClosed = true;
     this.cleanup();
     useConnectionStore.getState().setStatus('disconnected');
+    useConnectionStore.getState().setHostHealth('unknown');
     useConnectionStore.getState().setServerInfo(null);
     useConnectionStore.getState().setLatency(0);
     useConnectionStore.getState().setAuthenticated(false);
@@ -132,7 +137,7 @@ class WebSocketClient {
 
   private fastMsgSeq = 0;
 
-  public send<T>(type: 'command' | 'event' | 'response' | 'heartbeat', action: string, payload: T) {
+  public send<T>(type: 'command' | 'event' | 'response' | 'heartbeat', action: string, payload: T): boolean {
     const isPointerMove = action === 'mouse.move';
     if (isPointerMove) {
       const move = payload as { dx?: unknown; dy?: unknown } | null;
@@ -147,7 +152,13 @@ class WebSocketClient {
     if (!this.isConnected()) {
       if (isPointerMove) this.pointerDiagnostics.blocked += 1;
       useConnectionStore.getState().addLog('warn', `Cannot send ${action}: Not connected`);
-      return;
+      return false;
+    }
+
+    const { hostHealth } = useConnectionStore.getState();
+    if (type === 'command' && !action.startsWith('auth.') && hostHealth !== 'responsive') {
+      if (isPointerMove) this.pointerDiagnostics.blocked += 1;
+      return false;
     }
 
     const envelope: MessageEnvelope<T> = {
@@ -165,9 +176,11 @@ class WebSocketClient {
         this.pointerDiagnostics.sent += 1;
         this.pointerDiagnostics.lastSentAt = Date.now();
       }
+      return true;
     } catch (err) {
       if (isPointerMove) this.pointerDiagnostics.errors += 1;
       useConnectionStore.getState().addLog('error', `Send error for ${action}: ${err}`);
+      return false;
     }
   }
 
@@ -203,16 +216,18 @@ class WebSocketClient {
   private handleOpen() {
     const store = useConnectionStore.getState();
     store.setStatus('connected');
+    store.setHostHealth('checking');
     store.resetReconnectAttempts();
     store.addLog('success', 'Connected to Windows Agent!');
 
     this.lastPongTime = Date.now();
+    this.lastDataTime = this.lastPongTime;
     this.startHeartbeat();
   }
 
   private handleMessage(event: MessageEvent) {
     try {
-      this.lastPongTime = Date.now(); // Any frame or message proves socket and server are alive!
+      this.lastDataTime = Date.now();
 
       // Check for binary messages (e.g. Screen Mirroring JPEG frames)
       if (typeof event.data !== 'string') {
@@ -281,6 +296,7 @@ class WebSocketClient {
         const pong = envelope.payload as PongPayload;
         const now = Date.now();
         this.lastPongTime = now;
+        store.setHostHealth('responsive');
         const rtt = Math.max(0, now - pong.clientTime);
         store.setLatency(rtt);
         store.setLastHeartbeat(now);
@@ -311,6 +327,7 @@ class WebSocketClient {
   private handleClose(event: CloseEvent) {
     this.stopHeartbeat();
     const store = useConnectionStore.getState();
+    store.setHostHealth('unknown');
     store.setLatency(0);
 
     if (this.isManuallyClosed) {
@@ -332,11 +349,16 @@ class WebSocketClient {
     this.stopHeartbeat();
     this.heartbeatTimer = window.setInterval(() => {
       if (this.isConnected()) {
-        const timeSinceLastData = Date.now() - this.lastPongTime;
+        const now = Date.now();
+        const timeSinceLastData = now - this.lastDataTime;
+        const timeSinceLastPong = now - this.lastPongTime;
         if (timeSinceLastData > this.WATCHDOG_TIMEOUT) {
           useConnectionStore.getState().addLog('warn', `Heartbeat timeout: No data for ${(timeSinceLastData / 1000).toFixed(0)}s. Reconnecting...`);
           this.reconnectImmediate();
           return;
+        }
+        if (timeSinceLastPong > this.STALE_HOST_TIMEOUT) {
+          useConnectionStore.getState().setHostHealth('stale');
         }
         this.send('heartbeat', 'system.ping', { clientTime: Date.now() });
       }

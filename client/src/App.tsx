@@ -14,7 +14,8 @@ import {
   Smartphone,
   CheckCircle,
   ShieldCheck,
-  ShieldAlert
+  ShieldAlert,
+  RefreshCw
 } from 'lucide-react';
 
 export const App: React.FC = () => {
@@ -22,7 +23,9 @@ export const App: React.FC = () => {
   const [isPairingOpen, setIsPairingOpen] = useState(false);
   const [autoFocusKeyboard, setAutoFocusKeyboard] = useState(false);
   const [keyboardOpenedFromScreen, setKeyboardOpenedFromScreen] = useState(false);
-  const { status, isAuthenticated, latency } = useConnectionStore();
+  const [keyboardDraft, setKeyboardDraft] = useState('');
+  const [keyboardDraftUnsent, setKeyboardDraftUnsent] = useState(false);
+  const { status, hostHealth, isAuthenticated, latency } = useConnectionStore();
 
   const openKeyboardForTyping = useCallback(() => {
     setAutoFocusKeyboard(true);
@@ -50,12 +53,12 @@ export const App: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    if (status === 'connected' && !isAuthenticated) {
+    if (status === 'connected' && hostHealth === 'responsive' && !isAuthenticated) {
       setIsPairingOpen(true);
     } else if (isAuthenticated) {
       setIsPairingOpen(false);
     }
-  }, [status, isAuthenticated]);
+  }, [status, hostHealth, isAuthenticated]);
 
   // Screen Wake Lock: Keep phone screen awake while connected to prevent auto-lock during remote control
   useEffect(() => {
@@ -138,22 +141,32 @@ export const App: React.FC = () => {
                 if (status === 'disconnected') {
                   if ('vibrate' in navigator) navigator.vibrate(10);
                   wsClient.connect();
+                } else if (status === 'connected' && hostHealth === 'stale') {
+                  if ('vibrate' in navigator) navigator.vibrate(10);
+                  wsClient.reconnectImmediate();
                 }
               }}
-              disabled={status === 'connecting' || status === 'reconnecting'}
-              aria-label={`Connection Status: ${status}${latency !== null ? `, Latency: ${latency}ms` : ''}`}
+              disabled={status === 'connecting' || status === 'reconnecting' || (status === 'connected' && hostHealth === 'checking')}
+              aria-label={`Connection Status: ${status === 'connected' ? hostHealth : status}${latency !== null ? `, Latency: ${latency}ms` : ''}`}
               className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-mono font-semibold border transition-all active:scale-95 ${
-                status === 'connected'
+                status === 'connected' && hostHealth === 'responsive'
                   ? latency !== null && latency > 90
                     ? 'bg-amber-500/10 text-amber-300 border-amber-500/30'
                     : 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30'
+                  : status === 'connected' && hostHealth === 'stale'
+                  ? 'bg-rose-500/15 text-rose-300 border-rose-500/40 cursor-pointer'
+                  : status === 'connected'
+                  ? 'bg-amber-500/10 text-amber-400 border-amber-500/30 animate-pulse'
                   : status === 'connecting' || status === 'reconnecting'
                   ? 'bg-amber-500/10 text-amber-400 border-amber-500/30 animate-pulse'
                   : 'bg-rose-500/15 text-rose-300 border-rose-500/40 hover:bg-rose-500/25 cursor-pointer shadow-sm shadow-rose-950/40'
               }`}
             >
-              <span className={`w-2 h-2 rounded-full ${
-                status === 'connected' 
+              {status === 'connected' && hostHealth !== 'responsive' ? (
+                <RefreshCw className={`w-3 h-3 ${hostHealth === 'checking' ? 'animate-spin' : ''}`} />
+              ) : (
+                <span className={`w-2 h-2 rounded-full ${
+                status === 'connected' && hostHealth === 'responsive'
                   ? latency !== null && latency > 90 
                     ? 'bg-amber-400 shadow-sm shadow-amber-400/50' 
                     : 'bg-emerald-400 shadow-sm shadow-emerald-400/60 animate-pulse'
@@ -161,9 +174,12 @@ export const App: React.FC = () => {
                   ? 'bg-amber-400 animate-ping'
                   : 'bg-rose-500'
               }`} />
+              )}
               <span>
                 {status === 'connected'
-                  ? latency !== null ? `${latency} ms` : 'Connected'
+                  ? hostHealth === 'responsive'
+                    ? latency !== null ? `${latency} ms` : 'Connected'
+                    : hostHealth === 'stale' ? 'PC not responding' : 'Checking PC...'
                   : status === 'reconnecting'
                   ? 'Reconnecting...'
                   : status === 'connecting'
@@ -255,6 +271,10 @@ export const App: React.FC = () => {
                 </p>
               </div>
               <KeyboardControlBar
+                textInput={keyboardDraft}
+                onTextInputChange={setKeyboardDraft}
+                isTextUnsent={keyboardDraftUnsent}
+                onTextUnsentChange={setKeyboardDraftUnsent}
                 autoFocusInput={autoFocusKeyboard}
                 onAutoFocusHandled={() => setAutoFocusKeyboard(false)}
               />

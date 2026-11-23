@@ -24,13 +24,23 @@ import {
 type ModifierState = 'IDLE' | 'STICKY' | 'LOCKED';
 
 interface KeyboardControlBarProps {
+  textInput: string;
+  onTextInputChange: (text: string) => void;
+  isTextUnsent: boolean;
+  onTextUnsentChange: (unsent: boolean) => void;
   autoFocusInput?: boolean;
   onAutoFocusHandled?: () => void;
 }
 
-export const KeyboardControlBar: React.FC<KeyboardControlBarProps> = ({ autoFocusInput = false, onAutoFocusHandled }) => {
+export const KeyboardControlBar: React.FC<KeyboardControlBarProps> = ({
+  textInput,
+  onTextInputChange,
+  isTextUnsent,
+  onTextUnsentChange,
+  autoFocusInput = false,
+  onAutoFocusHandled
+}) => {
   const connectionStatus = useConnectionStore((s) => s.status);
-  const [textInput, setTextInput] = useState('');
   const [modifiers, setModifiers] = useState<Record<string, ModifierState>>({
     CTRL: 'IDLE',
     ALT: 'IDLE',
@@ -149,10 +159,15 @@ export const KeyboardControlBar: React.FC<KeyboardControlBarProps> = ({ autoFocu
     const text = pendingTextRef.current;
     if (!text) return;
 
-    pendingTextRef.current = '';
-    setTextInput('');
-    wsClient.send('command', 'keyboard.text', { text });
-    releaseStickyModifiers();
+    const sent = wsClient.send('command', 'keyboard.text', { text });
+    if (sent) {
+      pendingTextRef.current = '';
+      onTextInputChange('');
+      onTextUnsentChange(false);
+      releaseStickyModifiers();
+    } else {
+      onTextUnsentChange(true);
+    }
   };
 
   const scheduleTextFlush = (text: string, delayMs: number) => {
@@ -180,10 +195,12 @@ export const KeyboardControlBar: React.FC<KeyboardControlBarProps> = ({ autoFocu
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = e.target.value;
-    setTextInput(val);
+    onTextInputChange(val);
+    onTextUnsentChange(false);
 
     if (!isComposingRef.current && !val) {
       pendingTextRef.current = '';
+      onTextUnsentChange(false);
       if (sendTextTimerRef.current !== null) {
         window.clearTimeout(sendTextTimerRef.current);
         sendTextTimerRef.current = null;
@@ -226,12 +243,30 @@ export const KeyboardControlBar: React.FC<KeyboardControlBarProps> = ({ autoFocu
     }
   };
 
+  const retryUnsentText = () => {
+    if (!textInput || !isTextUnsent) return;
+    const sent = wsClient.send('command', 'keyboard.text', { text: textInput });
+    if (sent) {
+      pendingTextRef.current = '';
+      onTextInputChange('');
+      onTextUnsentChange(false);
+    }
+  };
+
   useEffect(() => () => {
     if (sendTextTimerRef.current !== null) window.clearTimeout(sendTextTimerRef.current);
     const pending = pendingTextRef.current;
-    if (pending) wsClient.send('command', 'keyboard.text', { text: pending });
+    if (pending) {
+      const sent = wsClient.send('command', 'keyboard.text', { text: pending });
+      if (sent) {
+        onTextInputChange('');
+        onTextUnsentChange(false);
+      } else {
+        onTextUnsentChange(true);
+      }
+    }
     pendingTextRef.current = '';
-  }, []);
+  }, [onTextInputChange, onTextUnsentChange]);
 
   // Execute quick shortcut without unintended modifier merging
   const handleShortcut = (keys: string[]) => {
@@ -262,6 +297,14 @@ export const KeyboardControlBar: React.FC<KeyboardControlBarProps> = ({ autoFocu
 
   return (
     <div className="flex flex-col w-full space-y-3 p-1 select-none">
+      {isTextUnsent && textInput && (
+        <div role="status" className="flex items-center justify-between gap-3 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2">
+          <span className="text-[11px] leading-relaxed text-amber-200">Text was not sent. Retry when ready.</span>
+          <button type="button" onClick={retryUnsentText} className="shrink-0 rounded-lg bg-amber-400/20 px-3 py-1.5 text-xs font-semibold text-amber-100 transition-colors hover:bg-amber-400/30">
+            Retry text
+          </button>
+        </div>
+      )}
       {/* 1. Native iOS Keyboard Input Box */}
       <div className="bg-dark-800/90 rounded-2xl p-2.5 border border-slate-700/80 shadow-lg flex items-center gap-2">
         <input

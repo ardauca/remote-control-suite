@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { ConnectionStatus, ServerHelloPayload } from '../protocol/protocolTypes';
+import { ConnectionStatus, HostHealth, ServerHelloPayload } from '../protocol/protocolTypes';
 
 export interface LogEntry {
   id: string;
@@ -10,6 +10,7 @@ export interface LogEntry {
 
 interface ConnectionState {
   status: ConnectionStatus;
+  hostHealth: HostHealth;
   serverUrl: string;
   latency: number | null;
   serverInfo: ServerHelloPayload | null;
@@ -27,6 +28,7 @@ interface ConnectionState {
 
   // Actions
   setStatus: (status: ConnectionStatus) => void;
+  setHostHealth: (health: HostHealth) => void;
   setServerUrl: (url: string) => void;
   setLatency: (latency: number) => void;
   setServerInfo: (info: ServerHelloPayload | null) => void;
@@ -52,6 +54,7 @@ const getDefaultServerUrl = (): string => {
 
 export const useConnectionStore = create<ConnectionState>((set) => ({
   status: 'disconnected',
+  hostHealth: 'unknown',
   serverUrl: localStorage.getItem('remote_suite_ws_url') || getDefaultServerUrl(),
   latency: null,
   serverInfo: null,
@@ -67,6 +70,7 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
   authError: null,
 
   setStatus: (status) => set({ status }),
+  setHostHealth: (hostHealth) => set({ hostHealth }),
   setServerUrl: (url) => {
     localStorage.setItem('remote_suite_ws_url', url);
     set({ serverUrl: url });

@@ -19,6 +19,7 @@ interface ConnectionStatusCardProps {
 export const ConnectionStatusCard: React.FC<ConnectionStatusCardProps> = ({ onPair }) => {
   const { 
     status, 
+    hostHealth,
     serverUrl, 
     latency, 
     serverInfo, 
@@ -40,6 +41,7 @@ export const ConnectionStatusCard: React.FC<ConnectionStatusCardProps> = ({ onPa
       'Client version: 1.3',
       `Time: ${new Date().toISOString()}`,
       `Status: ${status}`,
+      `Windows host responsiveness: ${hostHealth}`,
       `Authorized: ${isAuthenticated ? `Yes (${deviceName || 'Paired Device'})` : 'No'}`,
       `Server: ${serverInfo?.serverName || 'Unknown'} (${serverInfo?.os || 'Unknown OS'})`,
       `WebSocket: ${serverUrl}`,
@@ -93,10 +95,18 @@ export const ConnectionStatusCard: React.FC<ConnectionStatusCardProps> = ({ onPa
   const getStatusBadge = () => {
     switch (status) {
       case 'connected':
+        if (hostHealth === 'responsive') {
+          return (
+            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+              Connected
+            </span>
+          );
+        }
         return (
-          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-            Connected
+          <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold border ${hostHealth === 'stale' ? 'bg-rose-500/10 text-rose-300 border-rose-500/20' : 'bg-amber-500/10 text-amber-400 border-amber-500/20'}`}>
+            <RefreshCw className={`w-3 h-3 ${hostHealth === 'checking' ? 'animate-spin' : ''}`} />
+            {hostHealth === 'stale' ? 'PC not responding' : 'Checking PC...'}
           </span>
         );
       case 'connecting':
@@ -130,7 +140,7 @@ export const ConnectionStatusCard: React.FC<ConnectionStatusCardProps> = ({ onPa
       <div className="bg-dark-800/80 backdrop-blur-md rounded-2xl p-5 border border-slate-800 shadow-xl space-y-4">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2.5">
-            <div className={`p-2.5 rounded-xl ${status === 'connected' ? 'bg-emerald-500/10 text-emerald-400' : 'bg-slate-800 text-slate-400'}`}>
+            <div className={`p-2.5 rounded-xl ${status === 'connected' && hostHealth === 'responsive' ? 'bg-emerald-500/10 text-emerald-400' : 'bg-slate-800 text-slate-400'}`}>
               <Server className="w-5 h-5" />
             </div>
             <div>
@@ -145,7 +155,7 @@ export const ConnectionStatusCard: React.FC<ConnectionStatusCardProps> = ({ onPa
           {getStatusBadge()}
         </div>
 
-        {/* Real-time Metrics (Latency, Signal Quality, Protocol) */}
+        {/* Real-time Metrics (Latency, Signal Quality, Transport) */}
         <div className="grid grid-cols-2 gap-3 pt-1">
           <div className="bg-dark-900/60 rounded-xl p-3 border border-slate-800/80">
             <div className="flex items-center justify-between text-xs text-slate-400 mb-1">
@@ -179,6 +189,7 @@ export const ConnectionStatusCard: React.FC<ConnectionStatusCardProps> = ({ onPa
                 type="button"
                 onClick={() => {
                   if ('vibrate' in navigator) navigator.vibrate(5);
+                  useConnectionStore.getState().setHostHealth('checking');
                   wsClient.send('heartbeat', 'system.ping', { clientTime: Date.now() });
                 }}
                 className="mt-2 text-[10px] text-brand-400 hover:text-brand-300 flex items-center gap-1 font-medium transition-colors"
@@ -192,12 +203,13 @@ export const ConnectionStatusCard: React.FC<ConnectionStatusCardProps> = ({ onPa
           <div className="bg-dark-900/60 rounded-xl p-3 border border-slate-800/80 flex flex-col justify-between">
             <div>
               <div className="flex items-center justify-between text-xs text-slate-400 mb-1">
-                <span>Protocol</span>
+                <span>Transport</span>
                 <ShieldCheck className="w-3.5 h-3.5 text-brand-500" />
               </div>
               <div className="text-lg font-bold text-white tracking-tight">
-                <span>v1.0 (LAN)</span>
+                <span>WebSocket</span>
               </div>
+              <div className="text-[10px] text-slate-500 mt-0.5">{serverInfo ? `Windows host v${serverInfo.version}` : 'Local network'}</div>
             </div>
             {status !== 'connected' && (
               <button
@@ -241,7 +253,7 @@ export const ConnectionStatusCard: React.FC<ConnectionStatusCardProps> = ({ onPa
             <span className="text-xs text-slate-300">
               {isAuthenticated
                 ? `Authorized (${deviceName || 'Paired Device'})`
-                : status === 'connected' ? 'Pair this device to enable controls' : 'Pairing is available after connecting'}
+                : status === 'connected' && hostHealth === 'responsive' ? 'Pair this device to enable controls' : 'Pairing is available after the PC responds'}
             </span>
           </div>
           {isAuthenticated ? (
@@ -254,7 +266,7 @@ export const ConnectionStatusCard: React.FC<ConnectionStatusCardProps> = ({ onPa
             >
               Unpair
             </button>
-          ) : status === 'connected' ? (
+          ) : status === 'connected' && hostHealth === 'responsive' ? (
             <button
               type="button"
               onClick={onPair}
@@ -267,7 +279,14 @@ export const ConnectionStatusCard: React.FC<ConnectionStatusCardProps> = ({ onPa
 
         {/* Quick Actions */}
         <div className="flex items-center gap-2 pt-1">
-          {status === 'connected' ? (
+          {status === 'connected' && hostHealth === 'stale' ? (
+            <button
+              onClick={() => wsClient.reconnectImmediate()}
+              className="flex-1 py-2.5 px-4 rounded-xl text-sm font-semibold bg-brand-500 hover:bg-brand-600 text-white shadow-lg shadow-brand-500/25 transition-all active:scale-[0.98]"
+            >
+              Reconnect Now
+            </button>
+          ) : status === 'connected' ? (
             <button
               onClick={() => wsClient.disconnect()}
               className="flex-1 py-2.5 px-4 rounded-xl text-sm font-medium bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border border-rose-500/30 transition-colors"
